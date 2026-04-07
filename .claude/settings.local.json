@@ -1,8 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(chmod +x /Users/nic-spect/code/recho_ai/recho_pipeline/setup.sh)",
-      "Bash(pyenv versions:*)"
-    ]
-  }
-}

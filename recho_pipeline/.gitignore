@@ -24,6 +24,9 @@ firmware/model.tflite
 notebooks/.ipynb_checkpoints/
 *.ipynb_checkpoints/
 
+# Claude Code
+.claude/
+
 # macOS
 .DS_Store
 
