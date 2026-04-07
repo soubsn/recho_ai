@@ -27,6 +27,9 @@ notebooks/.ipynb_checkpoints/
 # Claude Code
 .claude/
 
+# VSCode
+.vscode/
+
 # macOS
 .DS_Store
 
