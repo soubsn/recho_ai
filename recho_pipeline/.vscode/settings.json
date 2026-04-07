@@ -1,0 +1,18 @@
+{
+  "python.defaultInterpreterPath": "/Users/nic-spect/.pyenv/versions/3.10.13/bin/python3",
+  "python.analysis.extraPaths": ["${workspaceFolder}"],
+  "python.analysis.typeCheckingMode": "basic",
+  "editor.formatOnSave": true,
+  "[python]": {
+    "editor.defaultFormatter": "ms-python.black-formatter",
+    "editor.rulers": [100]
+  },
+  "python.testing.pytestEnabled": false,
+  "python.testing.unittestEnabled": false,
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/*.pyc": true,
+    "data/cache": true,
+    "output": true
+  }
+}

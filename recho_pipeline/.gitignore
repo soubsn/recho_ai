@@ -1,0 +1,32 @@
+# Virtual environment
+recho-dev/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Generated pipeline outputs
+output/
+data/cache/
+
+# Generated firmware artefacts (produced by convert.py)
+firmware/cmsis_nn_params.h
+firmware/model_data.cc
+firmware/model.tflite
+
+# Jupyter
+notebooks/.ipynb_checkpoints/
+*.ipynb_checkpoints/
+
+# macOS
+.DS_Store
+
+# Editor
+.venv/
+*.swp
