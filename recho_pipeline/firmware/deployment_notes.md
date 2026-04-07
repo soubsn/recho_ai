@@ -179,10 +179,117 @@ All targets expect:
 
 ### CMSIS-NN Kernel Map
 
-| Model Layer   | CMSIS-NN Kernel                   | Source File                              |
-|---------------|-----------------------------------|------------------------------------------|
-| Conv2D + ReLU | `arm_convolve_s8()` + fused ReLU  | ConvolutionFunctions/arm_convolve_s8.c   |
-| MaxPool2D     | `arm_max_pool_s8()`               | PoolingFunctions/arm_max_pool_s8.c       |
-| Flatten       | `arm_reshape_s8()` (no-op)        | —                                        |
-| Dense + ReLU  | `arm_fully_connected_s8()`        | FullyConnectedFunctions/arm_fully_connected_s8.c |
-| Softmax       | `arm_softmax_s8()`                | SoftmaxFunctions/arm_softmax_s8.c        |
+| Model Layer         | CMSIS-NN Kernel                   | Source File                                          |
+|---------------------|-----------------------------------|------------------------------------------------------|
+| Conv2D + ReLU       | `arm_convolve_s8()` + fused ReLU  | ConvolutionFunctions/arm_convolve_s8.c               |
+| Conv2D 1×1          | `arm_convolve_1x1_s8()`           | ConvolutionFunctions/arm_convolve_1x1_s8.c           |
+| DepthwiseConv2D     | `arm_depthwise_conv_s8()`         | ConvolutionFunctions/arm_depthwise_conv_s8.c         |
+| MaxPool2D           | `arm_max_pool_s8()`               | PoolingFunctions/arm_max_pool_s8.c                   |
+| Flatten             | `arm_reshape_s8()` (no-op)        | —                                                    |
+| Dense + ReLU        | `arm_fully_connected_s8()`        | FullyConnectedFunctions/arm_fully_connected_s8.c     |
+| Concatenate         | `arm_concatenation_s8()`          | ConcatenationFunctions/arm_concatenation_s8.c        |
+| Softmax             | `arm_softmax_s8()`                | SoftmaxFunctions/arm_softmax_s8.c                    |
+
+---
+
+## Multi-Model Deployment (x(t) + y(t) architectures)
+
+The extended model suite processes both Hopf oscillator states x(t) and y(t).
+Five input representations are supported:
+
+| Representation | Description                          | Shape          |
+|----------------|--------------------------------------|----------------|
+| `x_only`       | x(t) feature map (paper 2 baseline)  | (200, 100, 1)  |
+| `y_only`       | y(t) feature map (same pipeline)     | (200, 100, 1)  |
+| `xy_dual`      | x and y stacked as channels          | (200, 100, 2)  |
+| `phase`        | r(t) = sqrt(x²+y²) orbit radius      | (200, 100, 1)  |
+| `angle`        | θ(t) = arctan2(y,x) phase angle      | (200, 100, 1)  |
+
+---
+
+## Model E — Late Fusion Dual-Input DMA
+
+Model E (`cnn_xy_fusion`) has two separate input tensors, one for x(t) and
+one for y(t). Each input requires its own DMA-filled buffer.
+
+### Single ADC — M33 (time-multiplexed)
+
+```c
+// x(t) window: sample 1 second of x(t) output
+HAL_ADC_Start_DMA(&hadc1, (uint32_t *)buffer_x, 200*100);
+
+// y(t) window: route to y ADC input, sample next 1 second
+// Hardware switch: multiplexer toggles Hopf output channel
+HAL_ADC_Stop_DMA(&hadc1);
+HAL_GPIO_WritePin(GPIOA, MUX_SEL_PIN, GPIO_PIN_SET);  // select y(t) output
+HAL_ADC_Start_DMA(&hadc1, (uint32_t *)buffer_y, 200*100);
+```
+
+### Dual ADC — M85 (simultaneous sampling)
+
+```c
+// Configure ADC1 for x(t), ADC2 for y(t)
+// Both sampled simultaneously via dual interleaved mode
+
+// ADC1 — x(t) channel
+hadc1.Init.ScanConvMode = DISABLE;
+HAL_ADC_Start_DMA(&hadc1, (uint32_t *)buffer_x, ADC_BUF_SIZE);
+
+// ADC2 — y(t) channel
+hadc2.Init.ScanConvMode = DISABLE;
+HAL_ADC_Start_DMA(&hadc2, (uint32_t *)buffer_y, ADC_BUF_SIZE);
+
+// TIM3 triggers both ADCs simultaneously at 100 kHz
+// PSC=0, ARR=(SystemCoreClock/100000)-1
+// ADC1_ETREG and ADC2_ETREG both set to TIM3_TRGO
+```
+
+### TFLite Micro inference with two inputs
+
+```c
+// After both DMA buffers are filled and feature extraction complete:
+TfLiteTensor* input_x = interpreter->input(0);  // x branch
+TfLiteTensor* input_y = interpreter->input(1);  // y branch
+
+// Copy quantised feature maps
+memcpy(input_x->data.int8, feature_x_int8, 200*100*sizeof(int8_t));
+memcpy(input_y->data.int8, feature_y_int8, 200*100*sizeof(int8_t));
+
+interpreter->Invoke();
+
+TfLiteTensor* output = interpreter->output(0);
+int8_t predicted_class = std::max_element(
+    output->data.int8,
+    output->data.int8 + n_classes
+) - output->data.int8;
+```
+
+---
+
+## Model F — Depthwise Separable CNN
+
+Model F (`depthwise_cnn`) uses `arm_depthwise_conv_s8()` for 8-9× fewer MACs.
+Link the additional depthwise source:
+
+```
+CMSIS/NN/Source/ConvolutionFunctions/arm_depthwise_conv_s8.c
+CMSIS/NN/Source/ConvolutionFunctions/arm_convolve_1x1_s8.c
+```
+
+On M55 with Helium, `arm_depthwise_conv_s8()` uses `vmlaq_s8` with 4×
+throughput. Expected inference time on M55 at 160 MHz: **< 2 ms**.
+
+---
+
+## Generated Firmware Files
+
+`convert_all.py` generates one set of artefacts per model:
+
+| File                              | Description                                      |
+|-----------------------------------|--------------------------------------------------|
+| `model_a_cnn_x_only.tflite`       | TFLite INT8 flatbuffer — load with TFLite Micro  |
+| `cmsis_nn_params_model_a_*.h`     | Weights, biases, per-channel quantisation params |
+| `model_data_model_a_*.cc`         | C byte array for inclusion in firmware           |
+| `model_b_cnn_xy_dual.tflite`      | Two-channel model                                |
+| `model_e_cnn_xy_fusion.tflite`    | Dual-input model (two input tensors)             |
+| `model_f_depthwise_cnn.tflite`    | Depthwise model — smallest, fastest              |

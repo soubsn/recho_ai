@@ -81,6 +81,38 @@ def integrate_hopf(
     return sol.y[0]  # x(t) only
 
 
+def integrate_hopf_xy(
+    a_func: Callable[[float], float],
+    duration: float = CLIP_DURATION,
+    fs: int = FS_HW,
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """
+    Integrate the Hopf ODE and return both x(t) and y(t) sampled at *fs* Hz.
+
+    y(t) is the quadrature state of the oscillator — the "spinning dot"
+    companion to x(t). The published papers (Shougat et al. 2021, 2023)
+    discard y(t), noting it "likely stores information". This function
+    captures both states from the same single integration pass.
+
+    Returns:
+        x: 1-D array of x(t) values, length = int(duration * fs)
+        y: 1-D array of y(t) values, same length
+    """
+    n_samples = int(duration * fs)
+    t_eval = np.linspace(0.0, duration, n_samples, endpoint=False)
+    sol = solve_ivp(
+        fun=lambda t, y: _hopf_rhs(t, y, a_func),
+        t_span=(0.0, duration),
+        y0=[0.1, 0.0],
+        t_eval=t_eval,
+        method="RK45",
+        max_step=1e-5,
+    )
+    if not sol.success:
+        raise RuntimeError(f"ODE integration failed: {sol.message}")
+    return sol.y[0], sol.y[1]  # x(t), y(t)
+
+
 # ---------------------------------------------------------------------------
 # Input signal generators — five synthetic sound classes
 # ---------------------------------------------------------------------------
@@ -147,6 +179,60 @@ def _class_factory(class_id: int, variation_seed: int) -> Callable[[float], floa
         return _make_noise(seed=variation_seed)
     else:
         raise ValueError(f"Unknown class_id={class_id}")
+
+
+def generate_dataset_xy(
+    n_clips_per_class: int = N_CLIPS_PER_CLASS,
+    n_classes: int = N_CLASSES,
+    cache: bool = True,
+) -> tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.int64]]:
+    """
+    Generate the full synthetic dataset, returning both x(t) and y(t).
+
+    Both states come from the same single numerical integration — no extra
+    computation compared to generate_dataset(). y(t) is the quadrature
+    state of the Hopf oscillator.
+
+    Returns:
+        x_data: (n_clips, n_hw_samples) raw x(t) at 100 kHz
+        y_data: (n_clips, n_hw_samples) raw y(t) at 100 kHz
+        labels: (n_clips,) integer class labels
+    """
+    cache_key = f"hopf_xy_n{n_clips_per_class}_c{n_classes}"
+    cache_x = CACHE_DIR / f"{cache_key}_x.npy"
+    cache_y_state = CACHE_DIR / f"{cache_key}_y_state.npy"
+    cache_labels = CACHE_DIR / f"{cache_key}_labels.npy"
+
+    if cache and cache_x.exists() and cache_y_state.exists() and cache_labels.exists():
+        print(f"[sample_data] Loading cached XY dataset from {CACHE_DIR}")
+        return np.load(cache_x), np.load(cache_y_state), np.load(cache_labels)
+
+    print(f"[sample_data] Generating XY dataset: {n_classes} classes x {n_clips_per_class} clips ...")
+    total = n_clips_per_class * n_classes
+    n_samples = int(CLIP_DURATION * FS_HW)
+    x_data = np.zeros((total, n_samples), dtype=np.float64)
+    y_data = np.zeros((total, n_samples), dtype=np.float64)
+    labels = np.zeros(total, dtype=np.int64)
+
+    idx = 0
+    for cls in range(n_classes):
+        for clip in range(n_clips_per_class):
+            seed = cls * 10_000 + clip
+            a_func = _class_factory(cls, seed)
+            x_data[idx], y_data[idx] = integrate_hopf_xy(a_func)
+            labels[idx] = cls
+            idx += 1
+            if idx % 50 == 0:
+                print(f"  [{idx}/{total}] clips generated")
+
+    if cache:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        np.save(cache_x, x_data)
+        np.save(cache_y_state, y_data)
+        np.save(cache_labels, labels)
+        print(f"[sample_data] Cached XY dataset to {CACHE_DIR}")
+
+    return x_data, y_data, labels
 
 
 def generate_dataset(
