@@ -70,6 +70,33 @@ Or run the end-to-end notebook:
 jupyter notebook notebooks/pipeline_demo.ipynb
 ```
 
+## Testing
+
+The repository includes a lightweight `pytest` suite covering:
+
+- Hopf oscillator regression checks
+- ingest and feature-extraction contracts
+- evaluation helper contracts
+- optional TensorFlow model smoke tests
+
+Run the default fast suite:
+
+```bash
+pytest -q tests
+```
+
+Run the TensorFlow model smoke tests explicitly:
+
+```bash
+RUN_TF_SMOKE=1 pytest -q tests/test_models_smoke.py
+```
+
+If your local environment auto-loads incompatible global pytest plugins, use:
+
+```bash
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests
+```
+
 ---
 
 ## Package Overview
@@ -181,6 +208,11 @@ recho_pipeline/
 │   └── deployment_notes.md     # M33 / M55 / M85+Ethos-U55 deployment guide
 ├── notebooks/
 │   └── pipeline_demo.ipynb     # End-to-end walkthrough with plots
+├── tests/
+│   ├── test_hopf.py            # Hopf solver determinism and boundedness checks
+│   ├── test_ingest_features.py # Feature extraction and representation contracts
+│   ├── test_evaluate_contracts.py # Evaluation helper contract tests
+│   └── test_models_smoke.py    # Optional TensorFlow model smoke tests
 ├── setup.sh                    # uv venv setup script
 ├── requirements.txt
 └── README.md
