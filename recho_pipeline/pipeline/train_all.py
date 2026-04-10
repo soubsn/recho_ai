@@ -6,7 +6,7 @@ representations, and trains every model in the zoo.
 
 Results are saved to results/model_comparison.csv with columns:
     Model | Category | Input | Accuracy | F1 | Train_time_s |
-    Inference_ms_est | Model_size_KB | RAM_KB | M33 | M55 | M85
+    Inference_ms_est | Model_size_KB | RAM_KB | M4 | M33 | M55 | M85
 
 Models grouped by category:
     === CLASSICAL SIGNAL METHODS ===    (no neural network, all arithmetic)
@@ -55,7 +55,7 @@ class ModelTrainConfig:
     input_type: str   # 'x_only'|'y_only'|'xy_dual'|'phase'|'angle'|
                       # 'raw_x'|'raw_xy'|'handcrafted'
     requires_normal_only: bool = False  # True for unsupervised anomaly detectors
-    target_chips: list = field(default_factory=lambda: ["M33", "M55", "M85"])
+    target_chips: list = field(default_factory=lambda: ["M4", "M33", "M55", "M85"])
     estimated_ram_kb: int = 64
     estimated_inference_ms: float = 5.0
 
@@ -87,36 +87,36 @@ class TrainConfig:
 # ─────────────────────────────────────────────────────────────────────────────
 MODEL_REGISTRY: list[ModelTrainConfig] = [
     # --- CLASSICAL ---
-    ModelTrainConfig("spc_monitor",         "Classical", "raw_x",      requires_normal_only=True,  target_chips=["M33"],           estimated_ram_kb=1,   estimated_inference_ms=0.001),
-    ModelTrainConfig("phase_portrait",      "Classical", "raw_xy",     requires_normal_only=False, target_chips=["M33"],           estimated_ram_kb=4,   estimated_inference_ms=0.1),
-    ModelTrainConfig("recurrence",          "Classical", "raw_x",      requires_normal_only=False, target_chips=["M33"],           estimated_ram_kb=8,   estimated_inference_ms=50.0),
-    ModelTrainConfig("hilbert",             "Classical", "raw_x",      requires_normal_only=False, target_chips=["M33"],           estimated_ram_kb=8,   estimated_inference_ms=0.5),
-    ModelTrainConfig("autocorrelation",     "Classical", "raw_x",      requires_normal_only=False, target_chips=["M33"],           estimated_ram_kb=8,   estimated_inference_ms=1.0),
+    ModelTrainConfig("spc_monitor",         "Classical", "raw_x",      requires_normal_only=True,  target_chips=["M4", "M33", "M55", "M85"], estimated_ram_kb=1,   estimated_inference_ms=0.001),
+    ModelTrainConfig("phase_portrait",      "Classical", "raw_xy",     requires_normal_only=False, target_chips=["M4", "M33", "M55", "M85"], estimated_ram_kb=4,   estimated_inference_ms=0.1),
+    ModelTrainConfig("recurrence",          "Classical", "raw_x",      requires_normal_only=False, target_chips=["M55", "M85"],   estimated_ram_kb=8,   estimated_inference_ms=50.0),
+    ModelTrainConfig("hilbert",             "Classical", "raw_x",      requires_normal_only=False, target_chips=["M4", "M33", "M55", "M85"], estimated_ram_kb=8,   estimated_inference_ms=0.5),
+    ModelTrainConfig("autocorrelation",     "Classical", "raw_x",      requires_normal_only=False, target_chips=["M4", "M33", "M55", "M85"], estimated_ram_kb=8,   estimated_inference_ms=1.0),
     # --- ML CLASSIFIERS ---
-    ModelTrainConfig("svm_x_only",          "ML",        "x_only",     requires_normal_only=False, target_chips=["M33"],           estimated_ram_kb=16,  estimated_inference_ms=0.5),
-    ModelTrainConfig("random_forest",       "ML",        "handcrafted",requires_normal_only=False, target_chips=["M33"],           estimated_ram_kb=8,   estimated_inference_ms=0.2),
-    ModelTrainConfig("knn",                 "ML",        "x_only",     requires_normal_only=False, target_chips=["M33"],           estimated_ram_kb=12,  estimated_inference_ms=0.3),
+    ModelTrainConfig("svm_x_only",          "ML",        "x_only",     requires_normal_only=False, target_chips=["M85"],           estimated_ram_kb=16,  estimated_inference_ms=0.5),
+    ModelTrainConfig("random_forest",       "ML",        "handcrafted",requires_normal_only=False, target_chips=["M4", "M33", "M55", "M85"], estimated_ram_kb=8,   estimated_inference_ms=0.2),
+    ModelTrainConfig("knn",                 "ML",        "x_only",     requires_normal_only=False, target_chips=["M4", "M33", "M55", "M85"], estimated_ram_kb=12,  estimated_inference_ms=0.3),
     # --- ANOMALY DETECTORS ---
-    ModelTrainConfig("gmm_anomaly",         "Anomaly",   "x_only",     requires_normal_only=True,  target_chips=["M33","M55"],     estimated_ram_kb=20,  estimated_inference_ms=1.0),
-    ModelTrainConfig("isolation_forest",    "Anomaly",   "handcrafted",requires_normal_only=False, target_chips=["M33"],           estimated_ram_kb=8,   estimated_inference_ms=0.2),
-    ModelTrainConfig("one_class_svm",       "Anomaly",   "x_only",     requires_normal_only=True,  target_chips=["M33","M55"],     estimated_ram_kb=16,  estimated_inference_ms=0.5),
-    ModelTrainConfig("autoencoder",         "Anomaly",   "x_only",     requires_normal_only=True,  target_chips=["M55","M85"],     estimated_ram_kb=64,  estimated_inference_ms=20.0),
+    ModelTrainConfig("gmm_anomaly",         "Anomaly",   "x_only",     requires_normal_only=True,  target_chips=["M55", "M85"],   estimated_ram_kb=20,  estimated_inference_ms=1.0),
+    ModelTrainConfig("isolation_forest",    "Anomaly",   "handcrafted",requires_normal_only=False, target_chips=["M4", "M33", "M55", "M85"], estimated_ram_kb=8,   estimated_inference_ms=0.2),
+    ModelTrainConfig("one_class_svm",       "Anomaly",   "x_only",     requires_normal_only=True,  target_chips=["M55", "M85"],   estimated_ram_kb=16,  estimated_inference_ms=0.5),
+    ModelTrainConfig("autoencoder",         "Anomaly",   "x_only",     requires_normal_only=True,  target_chips=["M55", "M85"],   estimated_ram_kb=64,  estimated_inference_ms=20.0),
     ModelTrainConfig("vae",                 "Anomaly",   "x_only",     requires_normal_only=True,  target_chips=["M85"],           estimated_ram_kb=128, estimated_inference_ms=40.0),
     # --- KERAS CNN MODELS ---
-    ModelTrainConfig("model_a_cnn_x_only",  "ML",        "x_only",     requires_normal_only=False, target_chips=["M55","M85"],     estimated_ram_kb=80,  estimated_inference_ms=45.0),
-    ModelTrainConfig("model_b_cnn_xy_dual", "ML",        "xy_dual",    requires_normal_only=False, target_chips=["M55","M85"],     estimated_ram_kb=80,  estimated_inference_ms=48.0),
-    ModelTrainConfig("model_c_cnn_phase",   "ML",        "phase",      requires_normal_only=False, target_chips=["M55","M85"],     estimated_ram_kb=80,  estimated_inference_ms=45.0),
-    ModelTrainConfig("model_d_cnn_angle",   "ML",        "angle",      requires_normal_only=False, target_chips=["M55","M85"],     estimated_ram_kb=80,  estimated_inference_ms=45.0),
-    ModelTrainConfig("model_e_cnn_fusion",  "ML",        "xy_dual",    requires_normal_only=False, target_chips=["M55","M85"],     estimated_ram_kb=160, estimated_inference_ms=90.0),
-    ModelTrainConfig("model_f_depthwise",   "ML",        "xy_dual",    requires_normal_only=False, target_chips=["M33","M55"],     estimated_ram_kb=40,  estimated_inference_ms=6.0),
-    ModelTrainConfig("model_g_ridge",       "ML",        "x_only",     requires_normal_only=False, target_chips=["M33"],           estimated_ram_kb=4,   estimated_inference_ms=2.0),
+    ModelTrainConfig("model_a_cnn_x_only",  "ML",        "x_only",     requires_normal_only=False, target_chips=["M55", "M85"],   estimated_ram_kb=80,  estimated_inference_ms=45.0),
+    ModelTrainConfig("model_b_cnn_xy_dual", "ML",        "xy_dual",    requires_normal_only=False, target_chips=["M55", "M85"],   estimated_ram_kb=80,  estimated_inference_ms=48.0),
+    ModelTrainConfig("model_c_cnn_phase",   "ML",        "phase",      requires_normal_only=False, target_chips=["M55", "M85"],   estimated_ram_kb=80,  estimated_inference_ms=45.0),
+    ModelTrainConfig("model_d_cnn_angle",   "ML",        "angle",      requires_normal_only=False, target_chips=["M55", "M85"],   estimated_ram_kb=80,  estimated_inference_ms=45.0),
+    ModelTrainConfig("model_e_cnn_fusion",  "ML",        "xy_dual",    requires_normal_only=False, target_chips=["M55", "M85"],   estimated_ram_kb=160, estimated_inference_ms=90.0),
+    ModelTrainConfig("model_f_depthwise",   "ML",        "xy_dual",    requires_normal_only=False, target_chips=["M33", "M55", "M85"], estimated_ram_kb=40,  estimated_inference_ms=6.0),
+    ModelTrainConfig("model_g_ridge",       "ML",        "x_only",     requires_normal_only=False, target_chips=["M33", "M55", "M85"], estimated_ram_kb=4,   estimated_inference_ms=2.0),
     # --- SEQUENCE MODELS ---
-    ModelTrainConfig("tcn",                 "Sequence",  "raw_x",      requires_normal_only=False, target_chips=["M33","M55"],     estimated_ram_kb=48,  estimated_inference_ms=15.0),
-    ModelTrainConfig("lstm",                "Sequence",  "raw_xy",     requires_normal_only=False, target_chips=["M55","M85"],     estimated_ram_kb=128, estimated_inference_ms=60.0),
-    ModelTrainConfig("esn",                 "Sequence",  "x_only",     requires_normal_only=False, target_chips=["M33","M55"],     estimated_ram_kb=32,  estimated_inference_ms=5.0),
+    ModelTrainConfig("tcn",                 "Sequence",  "raw_x",      requires_normal_only=False, target_chips=["M55", "M85"],   estimated_ram_kb=48,  estimated_inference_ms=15.0),
+    ModelTrainConfig("lstm",                "Sequence",  "raw_xy",     requires_normal_only=False, target_chips=["M85"],           estimated_ram_kb=128, estimated_inference_ms=60.0),
+    ModelTrainConfig("esn",                 "Sequence",  "x_only",     requires_normal_only=False, target_chips=["M4", "M33", "M55", "M85"], estimated_ram_kb=32,  estimated_inference_ms=5.0),
     # --- FEW-SHOT ---
-    ModelTrainConfig("contrastive",         "FewShot",   "x_only",     requires_normal_only=False, target_chips=["M55","M85"],     estimated_ram_kb=80,  estimated_inference_ms=45.0),
-    ModelTrainConfig("prototypical",        "FewShot",   "x_only",     requires_normal_only=False, target_chips=["M33","M55"],     estimated_ram_kb=16,  estimated_inference_ms=0.5),
+    ModelTrainConfig("contrastive",         "FewShot",   "x_only",     requires_normal_only=False, target_chips=["M85"],           estimated_ram_kb=80,  estimated_inference_ms=45.0),
+    ModelTrainConfig("prototypical",        "FewShot",   "x_only",     requires_normal_only=False, target_chips=["M4", "M33", "M55", "M85"], estimated_ram_kb=16,  estimated_inference_ms=0.5),
 ]
 
 
@@ -718,7 +718,7 @@ def train_all(cfg: TrainConfig) -> dict[str, dict]:
     csv_cols = [
         "Model", "Category", "Input", "Accuracy", "F1",
         "Train_time_s", "Inference_ms_est", "Model_size_KB",
-        "RAM_KB", "M33", "M55", "M85",
+        "RAM_KB", "M4", "M33", "M55", "M85",
     ]
     rows = []
     for mcfg in MODEL_REGISTRY:
@@ -740,6 +740,7 @@ def train_all(cfg: TrainConfig) -> dict[str, dict]:
             "Inference_ms_est": f"{mcfg.estimated_inference_ms:.1f}",
             "Model_size_KB": "—",
             "RAM_KB": str(mcfg.estimated_ram_kb),
+            "M4": "✓" if "M4" in mcfg.target_chips else "—",
             "M33": "✓" if "M33" in mcfg.target_chips else "—",
             "M55": "✓" if "M55" in mcfg.target_chips else "—",
             "M85": "✓" if "M85" in mcfg.target_chips else "—",

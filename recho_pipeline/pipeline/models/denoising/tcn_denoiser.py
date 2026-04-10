@@ -111,7 +111,14 @@ def build_model(
     base_channels: int = 32,
     dilations: tuple[int, ...] = DEFAULT_DILATIONS,
 ) -> "object":
-    """Build a causal residual TCN denoiser."""
+    """
+    Build a causal residual TCN denoiser.
+
+    Implementation note:
+    `ZeroPadding1D(..., 0)` + `Conv1D(..., padding="valid")` is used instead of
+    `padding="causal"` so the graph stays closer to the CMSIS/TFLite kernel map
+    used elsewhere in the package.
+    """
     import tensorflow as tf
     from tensorflow import keras
 
@@ -127,12 +134,21 @@ def build_model(
 
     for idx, dilation in enumerate(dilations, start=1):
         residual = x
-        y = keras.layers.Conv1D(
-            base_channels, kernel_size=3, dilation_rate=dilation, padding="causal",
-            activation="relu", name=f"denoise_tcn_block{idx}_conv1_d{dilation}",
+        pad = (3 - 1) * dilation
+        y = keras.layers.ZeroPadding1D(
+            padding=(pad, 0),
+            name=f"denoise_tcn_block{idx}_pad1_d{dilation}",
         )(x)
         y = keras.layers.Conv1D(
-            base_channels, kernel_size=3, dilation_rate=dilation, padding="causal",
+            base_channels, kernel_size=3, dilation_rate=dilation, padding="valid",
+            activation="relu", name=f"denoise_tcn_block{idx}_conv1_d{dilation}",
+        )(y)
+        y = keras.layers.ZeroPadding1D(
+            padding=(pad, 0),
+            name=f"denoise_tcn_block{idx}_pad2_d{dilation}",
+        )(y)
+        y = keras.layers.Conv1D(
+            base_channels, kernel_size=3, dilation_rate=dilation, padding="valid",
             activation="relu", name=f"denoise_tcn_block{idx}_conv2_d{dilation}",
         )(y)
         x = keras.layers.Add(name=f"denoise_tcn_block{idx}_residual")([residual, y])

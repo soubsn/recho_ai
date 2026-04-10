@@ -7,7 +7,8 @@ named CMSIS-NN kernel function.
 The Hopf oscillator circuit produces two voltage states `x(t)` and `y(t)` at
 100 kHz. This pipeline ingests those signals, extracts feature maps, trains a
 zoo of 26 classifiers and anomaly detectors, and exports firmware-ready INT8
-artefacts for deployment on **M33**, **M55** (Helium MVE), or **M85 + Ethos-U55**.
+artefacts for deployment on **M4**, **M33**, **M55** (Helium MVE), or
+**M85 + Ethos-U55**.
 
 **Physical basis:**
 - Shougat et al., *"A Hopf physical reservoir computer"*, Scientific Reports 2021 (paper 1) —
@@ -148,6 +149,17 @@ This path keeps the denoiser separate from the 26-model classifier/anomaly zoo,
 because the task shape is different: paired sequence regression instead of
 classification or anomaly scoring.
 
+Current deployment status:
+- the causal TCN denoiser is officially supported on `M55` and `M85`
+- `M4` and `M33` denoising are not part of the current supported product story
+- supporting denoising on `M4/M33` would require a smaller model, not just a
+  different converter setting
+
+Conversion note:
+- `pipeline.convert_denoiser` depends on a TFLite-compatible TensorFlow stack.
+- Pin `protobuf>=3.20.3,<5` with TensorFlow 2.16.x. Newer protobuf releases can
+  cause opaque MLIR conversion failures before export.
+
 ---
 
 ## Input Format
@@ -170,33 +182,39 @@ reshaped into a 200 time-step × 100 virtual-node feature map.
 
 26 models across 6 categories:
 
-| # | Name | Category | Input | MCU Target | Notes |
-|---|------|----------|-------|-----------|-------|
-| A | CNN x-only | keras | x_only | M33/M55 | Baseline; INT8 CMSIS-NN |
-| B | CNN xy-dual | keras | xy_dual | M33/M55 | Adds y(t) channel |
-| C | CNN phase | keras | phase | M33/M55 | Orbit radius input |
-| D | CNN angle | keras | angle | M33/M55 | Phase angle input |
-| E | CNN late-fusion | keras | x+y | M55 | Two-branch model |
-| F | Depthwise CNN | keras | xy_dual | M33 | ~8× faster, depthwise-sep |
-| G | Ridge readout | keras | x/y/xy | M33 | Linear classifier, no conv |
-| H | SPC Monitor | classical | x+y stream | M33 | Per-sample alert, <1 ms |
-| I | Phase Portrait | classical | x+y clips | M33 | Shoelace orbit features |
-| J | Recurrence QA | classical | x clips | M55 | RQA features, O(N²) |
-| K | Hilbert Transform | classical | x clips | M33 | Instantaneous freq/amp |
-| L | Autocorrelation | classical | x clips | M33 | Periodicity features |
-| M | SVM Classifier | ml | x/y/xy/phase/angle | M33 | PCA→SVC, GridSearchCV |
-| N | Random Forest | ml | x+y clips | M33 | 28 handcrafted features |
-| O | GMM Detector | ml | x clips | M55 | Normal-only unsupervised |
-| P | KNN Classifier | ml | x clips | M33 | k=5, pure-numpy MCU impl |
-| Q | Isolation Forest | ml | x+y clips | M33 | Fast anomaly, no labels |
-| R | Autoencoder | anomaly | x clips | M55 | Recon error threshold |
-| S | One-Class SVM | anomaly | x clips | M55 | Normal-only decision fn |
-| T | VAE | anomaly | x clips | M85 | ELBO score, smooth latent |
-| U | Contrastive | anomaly | x clips | M85 | SimCLR pretrain + proto |
-| V | TCN | sequence | raw 4kHz | M55 | Causal dilated conv |
-| W | LSTM | sequence | raw 4kHz | M85 | TFLite Micro LSTM op |
-| X | Echo State Net | sequence | x clips | M33 | Fixed reservoir, ridge out |
-| Y | Prototypical Net | fewshot | x clips | M33 | 5-shot, no retraining |
+Support labels used below:
+- `officially supported`: part of the current deployment story for that core
+- `conditional`: may work with board-specific tuning or a custom firmware path,
+  but is not part of the default supported product profile
+- `not recommended`: outside the current supported deployment profile
+
+| # | Name | Category | Input | Deployment Support | Notes |
+|---|------|----------|-------|--------------------|-------|
+| A | CNN x-only | keras | x_only | Official: M55/M85 | Baseline CNN; not recommended on M4/M33 |
+| B | CNN xy-dual | keras | xy_dual | Official: M55/M85 | Adds y(t); not recommended on M4/M33 |
+| C | CNN phase | keras | phase | Official: M55/M85 | Radius input; not recommended on M4/M33 |
+| D | CNN angle | keras | angle | Official: M55/M85 | Angle input; not recommended on M4/M33 |
+| E | CNN late-fusion | keras | x+y | Official: M55/M85 | Premium two-branch model |
+| F | Depthwise CNN | keras | xy_dual | Official: M33/M55/M85; Conditional: M4 | Lightweight learned model |
+| G | Ridge readout | keras | x/y/xy | Official: M33/M55/M85; Conditional: M4 | Linear readout, minimal compute |
+| H | SPC Monitor | classical | x+y stream | Official: M4/M33/M55/M85 | Per-sample alert, <1 ms |
+| I | Phase Portrait | classical | x+y clips | Official: M4/M33/M55/M85 | Shoelace orbit features |
+| J | Recurrence QA | classical | x clips | Official: M55/M85; Conditional: M33 | RQA features, O(N²) |
+| K | Hilbert Transform | classical | x clips | Official: M4/M33/M55/M85 | Instantaneous freq/amp |
+| L | Autocorrelation | classical | x clips | Official: M4/M33/M55/M85 | Periodicity features |
+| M | SVM Classifier | ml | x/y/xy/phase/angle | Official: M85; Conditional: M33 | Useful analytically; not a default low-cost firmware target |
+| N | Random Forest | ml | x+y clips | Official: M4/M33/M55/M85 | 28 handcrafted features |
+| O | GMM Detector | ml | x clips | Official: M55/M85; Conditional: M33 | Normal-only unsupervised |
+| P | KNN Classifier | ml | x clips | Official: M4/M33/M55/M85 | k=5, pure-numpy MCU impl |
+| Q | Isolation Forest | ml | x+y clips | Official: M4/M33/M55/M85 | Fast anomaly, no labels |
+| R | Autoencoder | anomaly | x clips | Official: M55/M85 | Recon error threshold |
+| S | One-Class SVM | anomaly | x clips | Official: M55/M85; Conditional: M33 | Normal-only decision fn |
+| T | VAE | anomaly | x clips | Official: M85 | ELBO score, smooth latent |
+| U | Contrastive | anomaly | x clips | Official: M85 | SimCLR pretrain + proto |
+| V | TCN | sequence | raw 4kHz | Official: M55/M85; Conditional: M33 | Causal dilated conv |
+| W | LSTM | sequence | raw 4kHz | Official: M85 | TFLite Micro LSTM op |
+| X | Echo State Net | sequence | x clips | Official: M4/M33/M55/M85 | Fixed reservoir, ridge out |
+| Y | Prototypical Net | fewshot | x clips | Official: M4/M33/M55/M85 | 5-shot, no retraining |
 
 ---
 
@@ -208,20 +226,42 @@ reshaped into a 200 time-step × 100 virtual-node feature map.
 | Only normal data | VAE / Autoencoder / One-Class SVM | Trained on normal only; anomaly = high recon / ELBO score |
 | <10 labelled examples | PrototypicalNetwork or Contrastive | Record 5 clips, update prototype; no GPU retraining |
 | Must explain to customer | SPC Monitor or Phase Portrait | Physics-derived; thresholds in physical units |
-| Real-time per-sample alert | SPC Monitor or Autocorrelation | O(1) per sample; no buffering; <1 ms on M33 |
+| Real-time per-sample alert | SPC Monitor or Autocorrelation | O(1) per sample; no buffering; strong fit for M4/M33 |
 | Switching tasks quickly | PrototypicalNetwork or KNN | Record 5 new clips, classification starts immediately |
-| Best accuracy (M85 only) | LSTM or TCN | Sequence models; capture full temporal structure |
-| M33 tight budget (64 KB) | SVM or Random Forest or SPC | PCA-compressed; pkl << 64 KB; <5 ms inference |
+| Best accuracy with premium hardware | CNN late-fusion or LSTM | Richer models; strongest story for M55/M85 products |
+| M4/M33 tight budget | SPC or Random Forest or KNN | Clear low-cost deployment story; easier to defend commercially |
+
+---
+
+## Deployment Policy
+
+`M4` and `M33` are not interchangeable in this package.
+
+- `M4` is treated as the most cost-sensitive deployment tier. It is where the
+  package leans on classical signal processing, tree-based models, nearest
+  neighbour methods, and prototypes.
+- `M33` adds headroom for a few lightweight learned models such as the
+  depthwise CNN and ridge readout, but it is still not the default target for
+  the heavier CNN and sequence families.
+- `M55` is the point where the package's richer neural models become part of
+  the official deployment story, including the current denoiser.
+- `M85` is the premium tier for the heaviest sequence and representation
+  learning models.
+
+The converter's deployment summary is a screening tool, not a final shipping
+guarantee. A successful `.tflite` export does not by itself prove board-level
+support.
 
 ---
 
 ## Target Chips
 
-| Chip | RAM | Key Feature | Fits |
-|------|-----|-------------|------|
-| Cortex-M33 | 64 KB | CMSIS-NN INT8, no SIMD | Classical, ML, ESN, SPC, KNN, SVM, RF, Prototypical |
-| Cortex-M55 | 128 KB | Helium MVE, 8× SIMD | + CNN A–F, TCN, Autoencoder, One-Class SVM, GMM |
-| Cortex-M85 + Ethos-U55 | 256 KB | NPU offload | + LSTM, VAE, Contrastive |
+| Chip | Effective Budget | Business Meaning | Officially Supported Families | Conditional / Notes |
+|------|------------------|------------------|------------------------------|---------------------|
+| Cortex-M4 | 48 KB | Lowest-cost always-on edge tier | SPC, Phase Portrait, Hilbert, Autocorrelation, Random Forest, KNN, Isolation Forest, ESN, Prototypical | Depthwise CNN and ridge readout are possible but not part of the default supported profile |
+| Cortex-M33 | 64 KB | Main low-power embedded tier | M4 set plus Depthwise CNN and Ridge | Recurrence, SVM, GMM, One-Class SVM, and TCN are conditional rather than default |
+| Cortex-M55 | 128 KB | Main neural inference tier | Small models plus CNN A-F, Recurrence, GMM, Autoencoder, One-Class SVM, TCN, current TCN denoiser | Best entry point for richer real-time ML on-device |
+| Cortex-M85 + Ethos-U55 | 256 KB | Premium compute tier | Full model zoo, including LSTM, VAE, Contrastive, and current denoiser | Best fit when top-end temporal accuracy matters most |
 
 ---
 

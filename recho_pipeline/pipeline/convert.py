@@ -22,8 +22,10 @@ from numpy.typing import NDArray
 import tensorflow as tf
 
 
-# RAM budgets per MCU target
+# Effective inference budgets per MCU target.
+# These are conservative screening limits, not final board-level guarantees.
 MCU_RAM_LIMITS: dict[str, int] = {
+    "M4": 48 * 1024,
     "M33": 64 * 1024,
     "M55": 128 * 1024,
     "M85": 256 * 1024,
@@ -90,21 +92,33 @@ def extract_cmsis_nn_params(tflite_path: str | Path) -> list[dict]:
         if len(scales) == 0:
             continue
 
-        tensor_data = interpreter.get_tensor(detail["index"])
+        tensor_data = None
+        try:
+            tensor_data = interpreter.get_tensor(detail["index"])
+        except ValueError:
+            # Some TFLite tensors are dynamically produced activations and do not
+            # expose host-readable buffers even after allocate_tensors(). We
+            # still keep their quant metadata for reporting, but only constant
+            # tensors (weights / biases) are expected to carry raw data.
+            pass
         param = {
             "name": detail["name"],
             "shape": list(detail["shape"]),
             "dtype": str(detail["dtype"]),
             "scales": scales.tolist(),
             "zero_points": zero_points.tolist(),
-            "data_shape": list(tensor_data.shape),
+            "data_shape": list(tensor_data.shape) if tensor_data is not None else [],
         }
 
-        # Weights are int8, biases are int32 in fully-quantised models
-        if detail["dtype"] == np.int8 and len(detail["shape"]) >= 2:
+        is_constant_tensor = detail["name"].startswith("tfl.pseudo_qconst")
+
+        # TFLite exported constants appear as tfl.pseudo_qconst* tensors.
+        # Readable activations may also have int8 buffers after allocation, but
+        # they must not be emitted as firmware weights.
+        if is_constant_tensor and tensor_data is not None and detail["dtype"] == np.int8 and len(detail["shape"]) >= 2:
             param["type"] = "weight"
             param["weight_data"] = tensor_data
-        elif detail["dtype"] == np.int32:
+        elif is_constant_tensor and tensor_data is not None and detail["dtype"] == np.int32:
             param["type"] = "bias"
             param["bias_data"] = tensor_data
 
@@ -302,7 +316,7 @@ def print_deployment_summary(tflite_path: str | Path) -> None:
     """
     Step E — Print deployment summary.
 
-    Reports model size, peak RAM, MCU fit, and CMSIS-NN coverage.
+    Reports model size, peak RAM, estimated MCU fit, and CMSIS-NN coverage.
     """
     tflite_bytes = Path(tflite_path).read_bytes()
     model_size = len(tflite_bytes)
@@ -330,11 +344,14 @@ def print_deployment_summary(tflite_path: str | Path) -> None:
             unsupported_ops.append(f"{detail['name']} (dtype={dtype})")
 
     print("\n" + "=" * 70)
-    print("DEPLOYMENT SUMMARY")
+    print("DEPLOYMENT SUMMARY (ESTIMATED)")
     print("=" * 70)
     print(f"  Model size:     {model_size:>10,} bytes ({model_size / 1024:.1f} KB)")
     print(f"  Peak RAM:       {peak_ram:>10,} bytes ({peak_ram / 1024:.1f} KB)")
     print(f"  Total tensors:  {len(tensor_details)}")
+    print("  Note: fit is estimated from model bytes + largest tensor only.")
+    print("        Final MCU support still depends on scratch buffers, arena size,")
+    print("        preprocessing memory, and measured on-target latency.")
     print()
 
     for mcu, limit in MCU_RAM_LIMITS.items():

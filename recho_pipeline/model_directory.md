@@ -6,33 +6,80 @@ Quick reference for all 26 models in the Recho Pipeline.
 
 ## Quick Reference Table
 
-| # | Model | Category | Class / Function | Input | MCU | Checkpoint |
-|---|-------|----------|-----------------|-------|-----|-----------|
-| A | CNN x-only | keras | `build_cnn_x_only()` | x_only (200×100) | M33/M55 | `checkpoints/model_a_cnn_x_only_best.keras` |
-| B | CNN xy-dual | keras | `build_cnn_xy_dual()` | xy_dual (200×100×2) | M33/M55 | `checkpoints/model_b_cnn_xy_dual_best.keras` |
-| C | CNN phase | keras | `build_model()` (cnn_x_only) | phase (200×100) | M33/M55 | `checkpoints/model_c_cnn_phase_best.keras` |
-| D | CNN angle | keras | `build_model()` (cnn_x_only) | angle (200×100) | M33/M55 | `checkpoints/model_d_cnn_angle_best.keras` |
-| E | CNN late-fusion | keras | `build_late_fusion()` | x+y (200×100×1 each) | M55 | `checkpoints/model_e_cnn_xy_fusion_best.keras` |
-| F | Depthwise CNN | keras | `build_depthwise_cnn()` | xy_dual (200×100×2) | M33 | `checkpoints/model_f_depthwise_cnn_best.keras` |
-| G | Ridge readout | keras/sklearn | `ReservoirReadout.fit_all_readouts()` | x/y/xy | M33 | `checkpoints/ridge_*.pkl` |
-| H | SPC Monitor | classical | `SPCMonitor` | x+y stream | M33 | in-memory only |
-| I | Phase Portrait | classical | `PhasePortraitClassifier` | x+y clips | M33 | `checkpoints/phase_portrait.pkl` |
-| J | Recurrence QA | classical | `RecurrenceClassifier` | x clips | M55 | `checkpoints/recurrence.pkl` |
-| K | Hilbert Transform | classical | `HilbertClassifier` | x clips | M33 | `checkpoints/hilbert.pkl` |
-| L | Autocorrelation | classical | `AutocorrClassifier` | x clips | M33 | `checkpoints/autocorr.pkl` |
-| M | SVM | ml | `SVMClassifier` | any 200×100 | M33 | `checkpoints/svm_*.pkl` |
-| N | Random Forest | ml | `RandomForestModel` | x+y clips | M33 | `checkpoints/random_forest.pkl` |
-| O | GMM Detector | ml | `GMMDetector` | x clips | M55 | `checkpoints/gmm_anomaly.pkl` |
-| P | KNN | ml | `KNNClassifier` | x clips | M33 | `checkpoints/knn.pkl` |
-| Q | Isolation Forest | ml | `IsolationForestModel` | x+y clips | M33 | `checkpoints/isolation_forest.pkl` |
-| R | Autoencoder | anomaly | `AnomalyAutoencoder` | x clips | M55 | `checkpoints/autoencoder.keras` |
-| S | One-Class SVM | anomaly | `OneClassSVMDetector` | x clips | M55 | `checkpoints/one_class_svm.pkl` |
-| T | VAE | anomaly | `VAEDetector` | x clips | M85 | `checkpoints/vae_weights.h5` |
-| U | Contrastive | anomaly | `ContrastiveClassifier` | x clips | M85 | `checkpoints/contrastive_encoder.keras` |
-| V | TCN | sequence | `TCNClassifier` | raw 4kHz (4000,) | M55 | `checkpoints/tcn.keras` |
-| W | LSTM | sequence | `LSTMClassifier` | raw 4kHz (T, 2) | M85 | `checkpoints/lstm.keras` |
-| X | Echo State Net | sequence | `EchoStateReadout` | x clips | M33 | `checkpoints/esn.pkl` |
-| Y | Prototypical Net | fewshot | `PrototypicalNetwork` | x clips | M33 | in-memory / `firmware/prototypes.h` |
+Support labels in this document:
+- `Officially supported` means part of the current deployment story for that core.
+- `Conditional` means potentially workable, but board-specific or not yet part of the default supported profile.
+- `Not recommended` means outside the current supported product story.
+
+| # | Model | Category | Class / Function | Input | MCU Support | Checkpoint |
+|---|-------|----------|-----------------|-------|-------------|-----------|
+| A | CNN x-only | keras | `build_cnn_x_only()` | x_only (200×100) | Officially supported: M55/M85 | `checkpoints/model_a_cnn_x_only_best.keras` |
+| B | CNN xy-dual | keras | `build_cnn_xy_dual()` | xy_dual (200×100×2) | Officially supported: M55/M85 | `checkpoints/model_b_cnn_xy_dual_best.keras` |
+| C | CNN phase | keras | `build_model()` (cnn_x_only) | phase (200×100) | Officially supported: M55/M85 | `checkpoints/model_c_cnn_phase_best.keras` |
+| D | CNN angle | keras | `build_model()` (cnn_x_only) | angle (200×100) | Officially supported: M55/M85 | `checkpoints/model_d_cnn_angle_best.keras` |
+| E | CNN late-fusion | keras | `build_late_fusion()` | x+y (200×100×1 each) | Officially supported: M55/M85 | `checkpoints/model_e_cnn_xy_fusion_best.keras` |
+| F | Depthwise CNN | keras | `build_depthwise_cnn()` | xy_dual (200×100×2) | Officially supported: M33/M55/M85; Conditional: M4 | `checkpoints/model_f_depthwise_cnn_best.keras` |
+| G | Ridge readout | keras/sklearn | `ReservoirReadout.fit_all_readouts()` | x/y/xy | Officially supported: M33/M55/M85; Conditional: M4 | `checkpoints/ridge_*.pkl` |
+| H | SPC Monitor | classical | `SPCMonitor` | x+y stream | Officially supported: M4/M33/M55/M85 | in-memory only |
+| I | Phase Portrait | classical | `PhasePortraitClassifier` | x+y clips | Officially supported: M4/M33/M55/M85 | `checkpoints/phase_portrait.pkl` |
+| J | Recurrence QA | classical | `RecurrenceClassifier` | x clips | Officially supported: M55/M85; Conditional: M33 | `checkpoints/recurrence.pkl` |
+| K | Hilbert Transform | classical | `HilbertClassifier` | x clips | Officially supported: M4/M33/M55/M85 | `checkpoints/hilbert.pkl` |
+| L | Autocorrelation | classical | `AutocorrClassifier` | x clips | Officially supported: M4/M33/M55/M85 | `checkpoints/autocorr.pkl` |
+| M | SVM | ml | `SVMClassifier` | any 200×100 | Officially supported: M85; Conditional: M33 | `checkpoints/svm_*.pkl` |
+| N | Random Forest | ml | `RandomForestModel` | x+y clips | Officially supported: M4/M33/M55/M85 | `checkpoints/random_forest.pkl` |
+| O | GMM Detector | ml | `GMMDetector` | x clips | Officially supported: M55/M85; Conditional: M33 | `checkpoints/gmm_anomaly.pkl` |
+| P | KNN | ml | `KNNClassifier` | x clips | Officially supported: M4/M33/M55/M85 | `checkpoints/knn.pkl` |
+| Q | Isolation Forest | ml | `IsolationForestModel` | x+y clips | Officially supported: M4/M33/M55/M85 | `checkpoints/isolation_forest.pkl` |
+| R | Autoencoder | anomaly | `AnomalyAutoencoder` | x clips | Officially supported: M55/M85 | `checkpoints/autoencoder.keras` |
+| S | One-Class SVM | anomaly | `OneClassSVMDetector` | x clips | Officially supported: M55/M85; Conditional: M33 | `checkpoints/one_class_svm.pkl` |
+| T | VAE | anomaly | `VAEDetector` | x clips | Officially supported: M85 | `checkpoints/vae_weights.h5` |
+| U | Contrastive | anomaly | `ContrastiveClassifier` | x clips | Officially supported: M85 | `checkpoints/contrastive_encoder.keras` |
+| V | TCN | sequence | `TCNClassifier` | raw 4kHz (4000,) | Officially supported: M55/M85; Conditional: M33 | `checkpoints/tcn.keras` |
+| W | LSTM | sequence | `LSTMClassifier` | raw 4kHz (T, 2) | Officially supported: M85 | `checkpoints/lstm.keras` |
+| X | Echo State Net | sequence | `EchoStateReadout` | x clips | Officially supported: M4/M33/M55/M85 | `checkpoints/esn.pkl` |
+| Y | Prototypical Net | fewshot | `PrototypicalNetwork` | x clips | Officially supported: M4/M33/M55/M85 | in-memory / `firmware/prototypes.h` |
+
+---
+
+## Deployment by Cortex-M
+
+### Cortex-M4
+
+This is the lowest-cost deployment tier in the package. It is best suited to
+always-on monitoring and lightweight classifiers that are easy to defend on
+price, power, and latency.
+
+- Best official fits: `H`, `I`, `K`, `L`, `N`, `P`, `Q`, `X`, `Y`
+- Conditional only: `F` and `G`
+- Not the current target for the heavier CNNs, sequence models, or denoiser
+
+### Cortex-M33
+
+This is the main low-power embedded tier. It adds enough headroom for a small
+learned model story, but it is still not the default target for the heavy
+neural families.
+
+- Best official fits: M4 set plus `F` and `G`
+- Conditional only: `J`, `M`, `O`, `S`, `V`
+- Good product story: low-cost always-on detection with a modest learned layer
+
+### Cortex-M55
+
+This is the point where the richer neural models become part of the official
+deployment story. It is the main edge-AI tier for customers who want stronger
+accuracy or the current denoising path.
+
+- Officially supported heavier models: `A`, `B`, `C`, `D`, `E`, `F`, `J`, `O`, `R`, `S`, `V`
+- Official denoising target: current `TCN Denoiser`
+- Best fit for “smarter edge device” messaging
+
+### Cortex-M85
+
+This is the premium compute tier. It supports the full model story, including
+the heaviest sequence and representation-learning models.
+
+- Adds official support for `W`, `T`, and `U`
+- Best fit when top-end temporal accuracy or premium on-device AI is the goal
 
 ---
 
@@ -244,7 +291,7 @@ part of the A-Y classifier/anomaly ranking.
 
 | Name | Type | Main Files | Input | Output | Target |
 |------|------|------------|-------|--------|--------|
-| TCN Denoiser | denoising | `data/denoise_data.py`, `pipeline/denoise_ingest.py`, `pipeline/models/denoising/tcn_denoiser.py` | Hopf reservoir sequence `(T, 2)` from noisy mixture | Clean waveform `(T, 1)` | M55 / M85 |
+| TCN Denoiser | denoising | `data/denoise_data.py`, `pipeline/denoise_ingest.py`, `pipeline/models/denoising/tcn_denoiser.py` | Hopf reservoir sequence `(T, 2)` from noisy mixture | Clean waveform `(T, 1)` | Officially supported: M55 / M85 |
 
 **What it does:** Generates paired noisy/clean waveforms, passes the noisy
 mixture through the Hopf reservoir, and trains a causal TCN to reconstruct a
@@ -254,6 +301,10 @@ clean target waveform from the resulting `x(t), y(t)` sequence.
 classification or anomaly detection. It uses different data, metrics,
 conversion output, and deployment assumptions, so it lives in its own train,
 evaluate, and convert entrypoints.
+
+**Roadmap note:** `M4` and `M33` denoising are not blocked by conversion
+alone. They need a smaller denoising architecture and a tighter memory plan
+than the current TCN denoiser.
 
 ---
 
@@ -282,7 +333,8 @@ model = build_model(n_classes=5)
 model.fit(X_train[..., np.newaxis], y_train, epochs=30)
 ```
 
-**Deployment notes:** INT8 TFLite. Fits M33 (64 KB). Generate with
+**Deployment notes:** INT8 TFLite. Officially supported on `M55/M85`. Not
+recommended on `M4/M33` in the current package. Generate with
 `pipeline/convert.py`. Checkpoint: `checkpoints/model_a_cnn_x_only_best.keras`.
 
 **Known limitations:** Uses `x(t)` only — adding `y(t)` (model B or E) may
@@ -314,8 +366,9 @@ model = build_cnn_xy_dual(n_classes=5)
 model.fit(X_xy_train, y_train, epochs=30)
 ```
 
-**Deployment notes:** INT8 TFLite. Slightly larger than A (extra input
-channel). Fits M33/M55.
+**Deployment notes:** INT8 TFLite. Officially supported on `M55/M85`. Slightly
+larger than A because of the extra input channel, so it is not part of the
+default `M4/M33` deployment story.
 
 **Known limitations:** Requires both ADC channels; adds hardware complexity.
 
@@ -426,7 +479,8 @@ model = build_depthwise_cnn(n_classes=5)
 ```
 
 **Deployment notes:** Dedicated CMSIS-NN kernel `arm_depthwise_conv_s8()`.
-Fits comfortably in M33 64 KB.
+Officially supported on `M33/M55/M85`. `M4` is a conditional fit only and
+should be treated as board-specific.
 
 **Known limitations:** Slight accuracy drop vs. standard conv (typical for
 depthwise models). Validate A vs F on your dataset before deploying.
@@ -960,8 +1014,10 @@ clf = TCNClassifier(n_classes=5, epochs=20)
 clf.fit(raw_clips, labels)
 ```
 
-**Deployment notes:** `checkpoints/tcn.keras`. Causal padding means no
-future context is needed — real-time streaming possible on M55.
+**Deployment notes:** `checkpoints/tcn.keras`. Officially supported on
+`M55/M85`; `M33` is conditional only in this package. Causal padding means no
+future context is needed, so real-time streaming is practical once the target
+has enough memory headroom.
 
 **Known limitations:** 4000-sample input requires 16 KB float32 buffer.
 Use INT8 quantisation and `arm_convolve_1_x_n_s8()` for M55 deployment.
@@ -992,12 +1048,13 @@ clf = LSTMClassifier(n_classes=5, epochs=20)
 clf.fit(x_clips, y_clips, labels)
 ```
 
-**Deployment notes:** `checkpoints/lstm.keras`. Requires M55 (128 KB) or
-M85 (256 KB). TFLite Micro LSTM op; enable `LSTM_FULL_KERNEL` in
+**Deployment notes:** `checkpoints/lstm.keras`. Officially supported on `M85`.
+`M55` is possible only as a measured, board-specific exercise, not as a
+default deployment claim. TFLite Micro LSTM op; enable `LSTM_FULL_KERNEL` in
 `tensorflow/lite/micro/kernels/lstm_eval.h`.
 
 **Known limitations:** Heaviest model — 64+32 LSTM units × 2 inputs × T
-timesteps. Not suitable for M33 (64 KB).
+timesteps. Not suitable for `M4/M33`, and only selectively viable on `M55`.
 
 ---
 
