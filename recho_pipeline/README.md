@@ -32,8 +32,17 @@ source recho-dev/bin/activate
 # Train all models (add --skip_keras / --skip_ml etc. to select subsets)
 python -m pipeline.train_all
 
+# Train the causal denoiser on paired noisy/clean data
+python -m pipeline.train_denoiser
+
 # Generate evaluation plots and comparison table
 python -m pipeline.evaluate
+
+# Evaluate denoising quality
+python -m pipeline.evaluate_denoiser
+
+# Convert the denoiser for firmware deployment
+python -m pipeline.convert_denoiser
 
 # Run tests
 pytest -q tests
@@ -96,6 +105,48 @@ Hopf oscillator hardware
                    │  firmware/model_data.cc     │
                    └────────────────────────────┘
 ```
+
+---
+
+## Classification / Anomaly Pipeline
+
+The existing package remains centered on classification and anomaly detection
+from Hopf reservoir outputs. That workflow is unchanged:
+
+- `pipeline/ingest.py` prepares `x(t)` feature maps
+- `pipeline/features.py` and `pipeline/features_xy.py` build classifier inputs
+- `pipeline/train_all.py` and `pipeline/evaluate.py` manage the model zoo
+- `pipeline/convert.py` exports the classification models for firmware
+
+## Denoising Pipeline
+
+The denoising workflow is now a separate, parallel path designed for paired
+noisy/clean training rather than class labels:
+
+```
+clean waveform + noise waveform
+        │
+        ▼
+data/denoise_data.py
+  paired (clean, noise, mixture)
+        │
+        ▼
+pipeline/denoise_ingest.py
+  mixture → Hopf reservoir → downsampled x(t), y(t) sequence
+        │
+        ├──────────────► clean target waveform (aligned)
+        ▼
+pipeline/models/denoising/tcn_denoiser.py
+  causal sequence-to-sequence TCN
+        │
+        ├──────────────► pipeline/train_denoiser.py
+        ├──────────────► pipeline/evaluate_denoiser.py
+        └──────────────► pipeline/convert_denoiser.py
+```
+
+This path keeps the denoiser separate from the 26-model classifier/anomaly zoo,
+because the task shape is different: paired sequence regression instead of
+classification or anomaly scoring.
 
 ---
 

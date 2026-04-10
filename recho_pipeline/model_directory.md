@@ -237,11 +237,27 @@ starting points in the current package are the `Autoencoder (R)`, `VAE (T)`,
 and sequence models such as `TCN (V)`, but that would require a new training
 objective and likely new paired noisy/clean data.
 
+## Denoising Additions
+
+These denoising components are implemented as a separate pipeline and are not
+part of the A-Y classifier/anomaly ranking.
+
+| Name | Type | Main Files | Input | Output | Target |
+|------|------|------------|-------|--------|--------|
+| TCN Denoiser | denoising | `data/denoise_data.py`, `pipeline/denoise_ingest.py`, `pipeline/models/denoising/tcn_denoiser.py` | Hopf reservoir sequence `(T, 2)` from noisy mixture | Clean waveform `(T, 1)` | M55 / M85 |
+
+**What it does:** Generates paired noisy/clean waveforms, passes the noisy
+mixture through the Hopf reservoir, and trains a causal TCN to reconstruct a
+clean target waveform from the resulting `x(t), y(t)` sequence.
+
+**Why it is separate:** Denoising is sequence-to-sequence regression, not
+classification or anomaly detection. It uses different data, metrics,
+conversion output, and deployment assumptions, so it lives in its own train,
+evaluate, and convert entrypoints.
+
 ---
 
 ## Model Sections
-
----
 
 ### A — CNN x-only (Baseline)
 
