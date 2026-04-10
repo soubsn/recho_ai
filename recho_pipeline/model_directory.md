@@ -36,6 +36,209 @@ Quick reference for all 26 models in the Recho Pipeline.
 
 ---
 
+## Recommendations
+
+Ranked recommendations for common product scenarios.
+
+### 1. Detecting a specific sound in a normal environment
+
+**1. CNN x-only (A)**
+Best default when the environment is relatively controlled and you want a
+strong production classifier. It uses the published reservoir representation
+directly and is the easiest model to position as the main baseline.
+
+**2. Prototypical Network (Y)**
+Best when the specific sound may vary by customer and you want fast onboarding
+with only a few examples. This is especially useful if the workflow is
+"record 5 examples of the target sound and start detecting immediately."
+
+**3. SVM Classifier (M)**
+Best classical ML backup when you want strong accuracy without relying on a
+larger neural network. It is a good option for smaller datasets and gives a
+credible lower-compute alternative to the CNN family.
+
+### 2. Detecting a specific sound in a high-noise environment
+
+**1. CNN late-fusion (E)**
+Best overall choice in this package for difficult acoustic environments when
+both `x(t)` and `y(t)` are available. It lets the model examine each channel
+independently before combining evidence, which gives it the best chance of
+separating target structure from noisy surroundings.
+
+**2. TCN Classifier (V)**
+Best sequence-oriented option when the timing pattern of the sound matters and
+background noise is heavy. Because it works directly on the waveform over time,
+it can capture temporal structure that image-style feature models may blur.
+
+**3. Contrastive Classifier (U)**
+Best if you expect domain shift and messy real-world conditions. Its main
+strength is learning robust embeddings from large amounts of unlabelled data,
+which is useful when office noise, room acoustics, and microphone conditions
+vary from site to site.
+
+### 3. Suppressing background noise
+
+This package does **not** currently contain a dedicated noise-suppression,
+source-separation, or speech-enhancement model. The models below are the
+closest fits if the practical goal is to stay robust in noise or to model
+"clean" behaviour, but they do not perform true waveform denoising as
+implemented today.
+
+**1. Autoencoder Anomaly Detector (R)**
+Closest current fit if you want a model that learns the structure of normal
+signals and reconstructs them. In principle this is the most natural starting
+point for a future denoising model, because autoencoders can be adapted to map
+noisy input to cleaner output. In the current package, however, it is used for
+anomaly scoring rather than noise suppression.
+
+**2. VAE Anomaly Detector (T)**
+Second-best foundation for future suppression work. Like the autoencoder, it
+learns a compact latent representation of normal behaviour, but with a smoother
+latent space that can be more stable under variation. Again, this is a good
+research direction, not a ready-made denoiser in the current code.
+
+**3. TCN Classifier (V)**
+Best practical fallback if your real need is not to remove noise from the
+audio itself, but to keep detecting the target sound despite noise. Sequence
+models are often the most sensible starting point when temporal structure must
+survive cluttered backgrounds.
+
+### 4. Lowest-cost embedded deployment
+
+**1. Depthwise CNN (F)**
+Best balance of modern pattern recognition and low compute cost. It is the
+strongest candidate when the commercial goal is to fit useful intelligence onto
+smaller, cheaper microcontrollers without giving up too much performance.
+
+**2. Ridge Readout (G)**
+Best ultra-lightweight classifier when memory, flash, and latency are all
+tight. It is simple, fast, and easy to deploy, which makes it attractive for
+very cost-sensitive products.
+
+**3. SPC Monitor (H)**
+Best if the requirement is continuous monitoring with almost no compute budget.
+It is not a general classifier, but it is the cheapest way in the package to
+provide immediate abnormality alerts on-device.
+
+### 5. Fastest field reconfiguration
+
+**1. Prototypical Network (Y)**
+Best overall choice when new sound classes need to be added immediately in the
+field. A few examples are enough to build a new class representation, with no
+full retraining cycle.
+
+**2. Contrastive Classifier (U)**
+Best higher-end option when you want rapid adaptation on top of a strong
+pretrained representation. It is especially attractive when the product can
+learn from large pools of unlabelled data and then adapt quickly at deployment.
+
+**3. KNN Classifier (P)**
+Best simple operational fallback. New categories can be added by storing new
+reference examples, making it easy to understand and easy to update.
+
+### 6. Only normal data available
+
+**1. GMM Detector (O)**
+Best lightweight anomaly detector when you can gather lots of normal data but
+very little fault data. It is commercially useful for monitoring and
+preventive-maintenance style deployments.
+
+**2. One-Class SVM Detector (S)**
+Best when you want a stricter learned boundary around acceptable behaviour. It
+is a strong option when the goal is to define what "normal" looks like and
+reject everything else.
+
+**3. Autoencoder Anomaly Detector (R)**
+Best when you want a more intuitive anomaly story based on reconstruction
+error. It is especially useful if you want to show examples of what the model
+can and cannot reconstruct cleanly.
+
+### 7. Most explainable to a customer
+
+**1. SPC Monitor (H)**
+Best pure explainability option. It is based on explicit statistical rules,
+which makes it easy to justify in business, industrial, or regulated settings.
+
+**2. Phase Portrait Classifier (I)**
+Best when you want a physical, visual explanation of what differs between
+classes. It gives a human-readable story about the geometry of the oscillator
+orbit.
+
+**3. Random Forest (N)**
+Best when you still want a stronger learned model but need to show which
+features mattered. Feature importance gives a more business-friendly narrative
+than a black-box neural network.
+
+### 8. Best raw accuracy if hardware budget is available
+
+**1. CNN late-fusion (E)**
+Best flagship classifier in the package when both oscillator channels are
+available and compute budget is not the first constraint. It is the strongest
+high-performance model to highlight in a premium product story.
+
+**2. LSTM Classifier (W)**
+Best memory-based sequence model for capturing complex temporal structure. It
+is appropriate when the signal history matters and high-end hardware is
+available.
+
+**3. TCN Classifier (V)**
+Best practical high-performance sequence alternative when you want strong
+temporal modelling with lower deployment cost than the LSTM.
+
+### 9. Always-on real-time alerting
+
+**1. SPC Monitor (H)**
+Best overall option for continuous live monitoring. It is the closest thing in
+the package to an always-on guardrail that can react immediately.
+
+**2. Autocorrelation Classifier (L)**
+Best when the business problem depends on stable repetition and cycle quality.
+It is useful for detecting when periodic structure weakens or drifts.
+
+**3. Depthwise CNN (F)**
+Best learned-model option when you still need embedded intelligence in a
+low-latency setting. It offers a better chance of fitting on-device than the
+heavier CNNs.
+
+### 10. Best when only a small labelled dataset exists
+
+**1. Prototypical Network (Y)**
+Best fit for few-shot use cases by design. It is the clearest option when
+labelled examples are scarce and deployment speed matters.
+
+**2. SVM Classifier (M)**
+Best traditional ML option for small datasets. It often generalises well
+before deep models have enough data to shine.
+
+**3. KNN Classifier (P)**
+Best simple baseline when the data is limited and you want a model that stays
+close to the examples themselves.
+
+### 11. Best when both x(t) and y(t) are available
+
+**1. CNN late-fusion (E)**
+Best use of the full oscillator state when hardware budget allows. It gives
+each channel its own path before combining evidence, making it the strongest
+showcase of dual-channel sensing.
+
+**2. CNN xy-dual (B)**
+Best simpler dual-channel model when you want the benefit of both oscillator
+states without the full cost of late fusion.
+
+**3. Random Forest (N)**
+Best explainable dual-channel alternative when you want to use information
+from both states but keep the reasoning more transparent.
+
+### 12. Future roadmap: true denoising
+
+This package does **not** yet include a true denoising, source-separation, or
+speech-enhancement model. If this becomes a product priority, the most natural
+starting points in the current package are the `Autoencoder (R)`, `VAE (T)`,
+and sequence models such as `TCN (V)`, but that would require a new training
+objective and likely new paired noisy/clean data.
+
+---
+
 ## Model Sections
 
 ---
