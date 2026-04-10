@@ -49,6 +49,11 @@ kernel.
 **When to use:** Default choice when only `x(t)` is available and accuracy
 matters more than speed.
 
+**What it all means:** This is the standard "smart pattern recogniser" for the
+main sensor signal. It looks at the signal as an image and learns the visual
+signature of each class. If you want one strong default model that is easy to
+position as the core product baseline, this is usually the place to start.
+
 **Input requirements:** `x_only` feature map, shape `(200, 100)` uint8.
 
 **Training example:**
@@ -75,6 +80,12 @@ for classes that differ in phase rather than amplitude.
 **When to use:** When both oscillator outputs are sampled and accuracy is
 prioritised over flash size.
 
+**What it all means:** This model listens with both "ears" instead of one.
+That gives it a fuller picture of how the oscillator is moving, which can help
+separate cases that look similar in one channel alone. It is a good choice
+when you want to show investors that the platform can unlock more value simply
+by reading more of the physics already present in the device.
+
 **Input requirements:** `xy_dual` feature map, shape `(200, 100, 2)` uint8.
 
 **Training example:**
@@ -99,6 +110,11 @@ training.
 
 **When to use:** When the signal class differs in oscillation amplitude.
 
+**What it all means:** Instead of watching the full motion, this model focuses
+on how far the oscillator is being pushed from its normal orbit. In plain
+language, it is measuring "how strong the disturbance is." This is useful when
+the business problem is mainly about changes in intensity rather than timing.
+
 **Input requirements:** `phase` feature map (orbit radius), shape `(200, 100)`.
 
 **Training example:**
@@ -122,6 +138,11 @@ frequency-modulated signals.
 
 **When to use:** When signals differ in phase progression rather than amplitude.
 
+**What it all means:** This model pays attention to where the oscillator is in
+its cycle and how that cycle evolves over time. In non-technical terms, it is
+better at seeing changes in rhythm than changes in strength. It is useful when
+two events have similar energy but different timing patterns.
+
 **Input requirements:** `angle` feature map, shape `(200, 100)`.
 
 **Training example:**
@@ -143,6 +164,11 @@ independent information in each oscillator state.
 
 **When to use:** When both signals are available and maximum accuracy is
 required, budget permitting.
+
+**What it all means:** This is the "premium" version of the CNN family. It
+lets the model study each oscillator channel separately before combining the
+evidence, which can improve accuracy on harder problems. It is the right story
+for high-value use cases where performance matters more than compute cost.
 
 **Input requirements:** Separate `x_only` and `y_only` tensors, each
 `(200, 100, 1)`.
@@ -167,6 +193,11 @@ fewer MACs than A.
 
 **When to use:** Tight M33 budget; latency-sensitive.
 
+**What it all means:** This is the lightweight efficiency model. It tries to
+keep most of the pattern-recognition power of a CNN while cutting the compute
+bill enough to fit on smaller, cheaper microcontrollers. It is useful when the
+commercial goal is low power, low cost, or edge deployment at scale.
+
 **Input requirements:** `xy_dual`, shape `(200, 100, 2)`.
 
 **Training example:**
@@ -190,6 +221,11 @@ convolution — just a matrix multiply (`arm_fully_connected_s8()`). Three
 variants: x_only, y_only, xy_concatenated.
 
 **When to use:** Absolute minimum RAM/flash budget; explainability required.
+
+**What it all means:** This is a very simple decision layer on top of the
+reservoir features. It does not try to learn deep patterns; it mostly weighs
+evidence and makes a fast linear decision. That makes it easy to deploy and
+easy to explain, so it is a good fit for constrained hardware or early demos.
 
 **Input requirements:** Flattened 200×100 = 20,000-element vector.
 
@@ -216,6 +252,12 @@ Rules 1–4 to the orbit radius `r = √(x²+y²)`. Anomaly detection with one
 
 **When to use:** Real-time per-sample streaming alert; hardware must respond
 within microseconds.
+
+**What it all means:** This is more like a guardrail than a classifier. It
+continuously watches the signal and raises an alert when behaviour moves
+outside the normal operating envelope. For investors, the message is that the
+platform can support immediate monitoring and safety-style detection, not just
+offline analytics.
 
 **Input requirements:** Per-sample `(x, y)` floats from the ADC.
 
@@ -245,6 +287,12 @@ that preserve amplitude (e.g. frequency shift only).
 **When to use:** Explainable classification; when physical orbit geometry
 distinguishes signal classes.
 
+**What it all means:** This model turns the oscillator motion into a geometric
+shape and then judges that shape using a few easy-to-understand measurements.
+It is less about raw accuracy and more about having a story a human can follow:
+"this class makes a wider orbit," or "that class shifts the centre." That is
+valuable in customer presentations and regulated environments.
+
 **Input requirements:** Paired `x_clip` and `y_clip`, shape `(200, 100)` each.
 
 **Training example:**
@@ -273,6 +321,12 @@ entropy, trapping time). Classifies with `RandomForestClassifier`.
 **When to use:** Rich characterisation of dynamical behaviour; research or
 diagnostic use.
 
+**What it all means:** This is a specialist dynamics model. It asks whether
+the signal repeats, stalls, or evolves in structured ways over time. It is
+useful when you want to study the behaviour deeply and understand the system,
+but it is better positioned as an advanced analysis tool than as the cheapest
+production option.
+
 **Input requirements:** `x_clip`, shape `(200, 100)`. `max_samples=500` for
 practical compute time (O(N²) truncated).
 
@@ -300,6 +354,12 @@ amplitude and frequency, then classifies 5 features
 
 **When to use:** Frequency-modulated or amplitude-modulated signals; when
 frequency trajectory over time is the distinguishing feature.
+
+**What it all means:** This model tries to answer two simple questions: "how
+strong is the signal right now?" and "how fast is it oscillating right now?"
+That makes it useful for problems where the meaning is carried by changing
+pitch or envelope over time. It is a strong choice when customers already
+think in terms of frequency, tone, or vibration speed.
 
 **Input requirements:** `x_clip`, shape `(200, 100)` uint8, treated as 1D
 time series internally.
@@ -330,6 +390,11 @@ via Pearson correlation.
 **When to use:** Distinguishing periodic from aperiodic signals; period-
 estimation tasks.
 
+**What it all means:** This model compares the signal with delayed copies of
+itself to see whether a stable rhythm is present. In plain language, it is a
+"repeatability detector." It works well when the business problem depends on
+regular cycles, heartbeat-like repetition, or loss of periodic structure.
+
 **Input requirements:** `x_clip`, shape `(200, 100)`.
 
 **Training example:**
@@ -357,6 +422,12 @@ xy_concatenated, phase, and angle representations.
 
 **When to use:** Strong non-linear classifier without deep learning; good
 generalisation from small datasets.
+
+**What it all means:** This is a classic machine-learning option that draws a
+flexible boundary between classes without using a large neural network. It is
+often a very strong baseline when you do not yet have massive datasets. For
+investors, it shows that the platform does not depend on heavy AI to deliver
+useful results.
 
 **Input requirements:** Any 200×100 feature map (flattened internally to
 20,000 dims → PCA → 50 dims).
@@ -388,6 +459,12 @@ to `firmware/random_forest.h`.
 **When to use:** Interpretable classification; firmware deployment without
 Keras; when feature importance plots are needed.
 
+**What it all means:** This model turns the raw oscillator behaviour into a
+set of named measurements and then makes decisions using many simple decision
+rules. That means you can show which factors mattered most. It is a good fit
+when stakeholders want a practical, explainable model that can still capture
+non-linear behaviour.
+
 **Input requirements:** Paired `x_clip` and `y_clip`, shape `(200, 100)` each.
 
 **Training example:**
@@ -416,6 +493,11 @@ of training scores.
 **When to use:** Unsupervised anomaly detection; when only normal data is
 available at training time.
 
+**What it all means:** This model learns what "normal" looks like and flags
+anything that does not fit that pattern well. It is useful in real operating
+environments where failures are rare and labelled fault data is scarce. That
+makes it commercially attractive for monitoring and preventive maintenance.
+
 **Input requirements:** `x_only` clips, shape `(200, 100)`.
 
 **Training example:**
@@ -443,6 +525,11 @@ reference embeddings to `firmware/knn_references.h`.
 
 **When to use:** Interpretable classification; few-shot extension (add a new
 class by appending a reference vector).
+
+**What it all means:** This model classifies a new signal by asking, "which
+saved example does it look most like?" That is easy to understand and easy to
+update. It is especially useful when new categories appear in the field and
+you want to add them quickly without retraining a full model.
 
 **Input requirements:** Any 200×100 feature map.
 
@@ -473,6 +560,12 @@ Exports a C path-length counter to `firmware/isolation_forest.h`.
 **When to use:** Fast unsupervised anomaly detection; no need to tune a
 threshold (automatic contamination estimate).
 
+**What it all means:** This model looks for samples that seem unusually easy
+to separate from the rest of the data. In plain language, it hunts for
+"outliers" rather than trying to name every class. It is a good fit when you
+care more about spotting unusual behaviour quickly than about assigning a
+precise label.
+
 **Input requirements:** Paired `x_clip` and `y_clip`.
 
 **Training example:**
@@ -500,6 +593,11 @@ MSE reconstruction error. Threshold = 95th percentile of training scores.
 **When to use:** Visual inspection of reconstructions; when reconstruction
 error is a meaningful physical signal.
 
+**What it all means:** This model compresses a normal signal and then tries to
+rebuild it. If the rebuild is poor, the input is probably unusual. That gives
+you an intuitive story for customers: the model has learned the shape of
+healthy behaviour, and anything it cannot recreate cleanly may be a fault.
+
 **Input requirements:** `x_only` clips, shape `(200, 100)`.
 
 **Training example:**
@@ -526,6 +624,11 @@ normal boundary.
 
 **When to use:** Normal-only training; when a probabilistic boundary is
 preferred over a reconstruction loss.
+
+**What it all means:** This is another "learn normal, reject abnormal" model,
+but instead of rebuilding the signal it draws a boundary around acceptable
+behaviour. It is useful when you want a mathematically clean definition of the
+safe operating region and do not need the extra complexity of a neural network.
 
 **Input requirements:** `x_only` clips, shape `(200, 100)`.
 
@@ -555,6 +658,11 @@ autoencoder.
 **When to use:** When reconstruction error alone is noisy; when a smooth
 manifold of normal behaviour is desired.
 
+**What it all means:** This is a more sophisticated version of the
+autoencoder. It does not just memorise examples; it learns a smoother map of
+what normal behaviour should look like. That can make anomaly scores more
+stable and more robust when the real world is messy.
+
 **Input requirements:** `x_only` clips, shape `(200, 100)`.
 
 **Training example:**
@@ -582,6 +690,12 @@ computing the mean embedding of 5 examples (prototype).
 
 **When to use:** The flagship RECHO reconfigurability model. Pretrain once
 overnight on unlabelled data; engineer labels 5 clips next morning.
+
+**What it all means:** This is the strongest story for rapid adaptation. The
+model first learns the general structure of the data without labels, then new
+classes can be added from just a handful of examples. For investors, this is
+the clearest example of a platform that can be reconfigured quickly in the
+field instead of requiring a long retraining cycle.
 
 **Input requirements:** `x_only` clips (no labels for pretraining).
 
@@ -613,6 +727,11 @@ pooling → Dense softmax.
 **When to use:** Long-range temporal dependencies in the raw signal; when
 LSTMs are too slow.
 
+**What it all means:** This model reads the signal as a timeline rather than
+as an image, so it is good at spotting patterns that unfold across time. It is
+a practical option when timing matters a lot but you still need something fast
+enough for embedded deployment.
+
 **Input requirements:** Raw downsampled signal, shape `(4000,)` float32.
 
 **Training example:**
@@ -638,6 +757,11 @@ Maps to TFLite Micro `LSTMFull` op.
 
 **When to use:** Maximum accuracy on sequence data; when M85/M55 RAM is
 available.
+
+**What it all means:** This is the heavyweight memory-based sequence model. It
+is designed to remember what happened earlier in the signal and use that
+history when making a decision. It is the right choice when you want to chase
+top-end temporal accuracy and have enough hardware budget to support it.
 
 **Input requirements:** Raw signal reshaped to `(T, 2)` float32 where
 T = number of timesteps.
@@ -667,6 +791,11 @@ output weights trained in one step. Exports `float32` output weights to
 
 **When to use:** When training must be completed in < 1 second; research
 into reservoir computing.
+
+**What it all means:** This model keeps most of its internal dynamics fixed
+and only learns the final readout, which makes training extremely fast. It is
+appealing when you want quick turnaround, low training cost, or a direct link
+to reservoir-computing ideas. It is also useful as a lightweight benchmark.
 
 **Input requirements:** `x_only` clips, shape `(200, 100)`.
 
@@ -698,6 +827,12 @@ updates (running mean) without retraining. Exports int8 prototype arrays to
 
 **When to use:** New signal class appears in the field; engineer records 5
 examples; classification updates immediately.
+
+**What it all means:** This is the fastest path to field reconfiguration. The
+system stores a small prototype for each class, and new categories can be
+added almost immediately from a few examples. For investors, this is easy to
+understand and commercially compelling because it reduces data collection and
+deployment friction.
 
 **Input requirements:** `x_only` clips for both support set and queries.
 
