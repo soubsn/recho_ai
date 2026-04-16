@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import json
 import multiprocessing as mp
 import os
 from pathlib import Path
@@ -471,6 +472,100 @@ def generate_dataset_xy_esc50(
     return x_data, y_data, labels, class_names
 
 
+# ---------------------------------------------------------------------------
+# Portable text/JSON export — for reuse across notebooks and other frameworks
+# ---------------------------------------------------------------------------
+
+def export_dataset_text(
+    out_dir: Path | str,
+    x_data: NDArray[np.float64],
+    labels: NDArray[np.int64],
+    class_names: list[str],
+    y_data: NDArray[np.float64] | None = None,
+    source_rows: list[dict[str, str]] | None = None,
+    source: str = "esc50",
+    export_fs: int = FS_TARGET,
+    hw_fs: int = FS_HW,
+) -> Path:
+    """
+    Write the integrated dataset as per-clip ASCII files plus manifest.json.
+
+    Layout:
+        out_dir/
+          manifest.json     -- params, class_names, label per clip, file index
+          labels.txt        -- one label int per line (clip-aligned)
+          classes.txt       -- one class name per line (label-aligned)
+          clips/
+            clip_0000_x.txt -- one float per line (single-column x(t))
+            clip_0000_y.txt -- present only if y_data was passed
+            ...
+
+    `export_fs` controls the on-disk sample rate. The default 4 kHz matches
+    Shougat et al. 2023 and the rate `pipeline/ingest.py` consumes — and keeps
+    each clip's text file ~240 KB (vs ~12 MB at 100 kHz).
+    Pass export_fs=hw_fs to keep the full 100 kHz rate (warning: ~12 MB/clip).
+    """
+    out_dir = Path(out_dir)
+    clips_dir = out_dir / "clips"
+    clips_dir.mkdir(parents=True, exist_ok=True)
+
+    if hw_fs % export_fs != 0:
+        raise ValueError(
+            f"export_fs ({export_fs}) must divide hw_fs ({hw_fs}); "
+            f"current value gives non-integer downsample factor."
+        )
+    ds_factor = hw_fs // export_fs
+    n = len(labels)
+    samples_per_clip = x_data.shape[1] // ds_factor
+
+    files = []
+    for i in range(n):
+        x_path = clips_dir / f"clip_{i:04d}_x.txt"
+        np.savetxt(x_path, x_data[i, ::ds_factor], fmt="%.6e")
+        entry: dict = {
+            "idx": i,
+            "label": int(labels[i]),
+            "class_name": class_names[int(labels[i])],
+            "x_path": f"clips/{x_path.name}",
+        }
+        if y_data is not None:
+            y_path = clips_dir / f"clip_{i:04d}_y.txt"
+            np.savetxt(y_path, y_data[i, ::ds_factor], fmt="%.6e")
+            entry["y_path"] = f"clips/{y_path.name}"
+        if source_rows is not None:
+            entry["source_filename"] = source_rows[i]["filename"]
+            entry["source_category"] = source_rows[i]["category"]
+        files.append(entry)
+        if (i + 1) % 50 == 0 or i + 1 == n:
+            print(f"  [export {i + 1}/{n}] wrote {x_path.name}")
+
+    np.savetxt(out_dir / "labels.txt", labels.astype(int), fmt="%d")
+    (out_dir / "classes.txt").write_text("\n".join(class_names))
+
+    manifest = {
+        "source": source,
+        "n_clips": n,
+        "n_classes": len(class_names),
+        "class_names": class_names,
+        "label_to_class": {str(i): name for i, name in enumerate(class_names)},
+        "audio_fs": ESC50_AUDIO_FS,
+        "hw_fs": hw_fs,
+        "export_fs": export_fs,
+        "downsample_factor": ds_factor,
+        "samples_per_clip": int(samples_per_clip),
+        "clip_duration_s": ESC50_CLIP_DURATION if source == "esc50" else CLIP_DURATION,
+        "hopf": {
+            "mu": MU, "A_drive": A_DRIVE,
+            "omega": float(OMEGA), "omega_drive": float(OMEGA_DRIVE),
+        },
+        "files": files,
+    }
+    with open(out_dir / "manifest.json", "w") as f:
+        json.dump(manifest, f, indent=2)
+    print(f"[sample_data] Exported {n} clips ({export_fs} Hz) to {out_dir}")
+    return out_dir
+
+
 def _class_factory(class_id: int, variation_seed: int) -> Callable[[float], float]:
     """Return an input signal function for the given class with slight variation."""
     rng = np.random.default_rng(variation_seed)
@@ -617,6 +712,20 @@ def _parse_args() -> argparse.Namespace:
              "<repo>/data/cache/ for synthetic.",
     )
     p.add_argument("--no-cache", action="store_true", help="Disable .npy cache load/store.")
+    p.add_argument(
+        "--xy", action="store_true",
+        help="Also integrate y(t) (uses generate_dataset_xy*). Doubles memory.",
+    )
+    p.add_argument(
+        "--export-dir", type=Path, default=None,
+        help="Also write per-clip .txt files + manifest.json to this directory "
+             "(portable for other tools/notebooks).",
+    )
+    p.add_argument(
+        "--export-fs", type=int, default=FS_TARGET,
+        help=f"Sample rate for .txt export (default {FS_TARGET} Hz, must divide {FS_HW}). "
+             "Use 100000 for full 100 kHz (~12 MB per clip).",
+    )
     return p.parse_args()
 
 
@@ -627,26 +736,60 @@ def main() -> None:
     cap = None if args.max_clips_per_class < 0 else args.max_clips_per_class
     workers = None if args.workers < 0 else args.workers
 
+    y_data: NDArray[np.float64] | None = None
+    source_rows: list[dict[str, str]] | None = None
+
     if args.source == "synthetic":
-        x_data, labels = generate_dataset(cache=cache)
+        if args.xy:
+            x_data, y_data, labels = generate_dataset_xy(cache=cache)
+        else:
+            x_data, labels = generate_dataset(cache=cache)
+        class_names = list(CLASS_NAMES[:N_CLASSES])
         print(f"\nDataset shape: x={x_data.shape}, labels={labels.shape}")
         for cls in range(N_CLASSES):
             count = int(np.sum(labels == cls))
             print(f"  Class {cls} ({CLASS_NAMES[cls]}): {count} clips")
     else:
-        x_data, labels, class_names = generate_dataset_esc50(
-            esc50_root=args.esc50_root,
-            esc10=args.esc10,
-            max_clips_per_class=cap,
-            cache=cache,
-            workers=workers,
-            cache_dir=args.cache_dir,
-        )
+        if args.xy:
+            x_data, y_data, labels, class_names = generate_dataset_xy_esc50(
+                esc50_root=args.esc50_root,
+                esc10=args.esc10,
+                max_clips_per_class=cap,
+                cache=cache,
+                workers=workers,
+                cache_dir=args.cache_dir,
+            )
+        else:
+            x_data, labels, class_names = generate_dataset_esc50(
+                esc50_root=args.esc50_root,
+                esc10=args.esc10,
+                max_clips_per_class=cap,
+                cache=cache,
+                workers=workers,
+                cache_dir=args.cache_dir,
+            )
+        if args.export_dir is not None:
+            # Re-derive the row list (in the same selection/order used by the
+            # generators) so the manifest can include source filenames.
+            all_rows = _read_esc50_csv(Path(args.esc50_root) / "esc50.csv")
+            source_rows, _ = _select_esc50_rows(all_rows, args.esc10, cap)
         print(f"\nDataset shape: x={x_data.shape}, labels={labels.shape}")
         for cls, name in enumerate(class_names):
             count = int(np.sum(labels == cls))
             print(f"  Class {cls} ({name}): {count} clips")
     print(f"  Sample range: [{x_data.min():.4f}, {x_data.max():.4f}]")
+
+    if args.export_dir is not None:
+        export_dataset_text(
+            out_dir=args.export_dir,
+            x_data=x_data,
+            labels=labels,
+            class_names=class_names,
+            y_data=y_data,
+            source_rows=source_rows,
+            source=args.source,
+            export_fs=args.export_fs,
+        )
 
 
 if __name__ == "__main__":

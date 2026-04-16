@@ -381,6 +381,70 @@ exports (e.g. `random_forest.export_firmware_header(class_names=…)`) and
 prototypical/contrastive few-shot support sets, replacing the synthetic
 `CLASS_NAMES` lookup whenever `--source esc50` is set.
 
+### Sample once, reuse everywhere — portable text/JSON export
+
+To run the Hopf integration **once** and reuse the result across many model
+experiments / notebooks / external tools, pass `--export-dir`. This writes
+per-clip ASCII files plus a `manifest.json` that any framework can consume.
+
+**Recommended one-shot for the whole dataset:**
+
+```bash
+# Full ESC-50 — both x(t) and y(t), exported at 4 kHz alongside the .npy cache.
+# ~1.5 hr first run; subsequent runs hit the cache and only re-export.
+python data/sample_data.py \
+    --source esc50 \
+    --max-clips-per-class -1 \
+    --xy \
+    --export-dir /Users/nic-spect/data/recho_ai/Kaggle_Environmental_Sound_Classification_50/hopf_text/
+
+# Lighter alternative — full ESC-10 (10 classes × 40 clips = 400 clips, ~20 min):
+python data/sample_data.py \
+    --source esc50 --esc10 --max-clips-per-class -1 --xy \
+    --export-dir /Users/nic-spect/data/recho_ai/Kaggle_Environmental_Sound_Classification_50/hopf_text_esc10/
+```
+
+**Layout written to `--export-dir`:**
+
+```
+hopf_text/
+├── manifest.json     # source, hopf params, class_names, label_to_class,
+│                     # downsample_factor, per-clip {idx, label, class_name,
+│                     # source_filename, x_path, y_path}
+├── labels.txt        # one label int per line, clip-aligned
+├── classes.txt       # one class name per line, label-aligned
+└── clips/
+    ├── clip_0000_x.txt   # one float per line (single-column x(t) at export_fs)
+    ├── clip_0000_y.txt   # only when --xy was passed
+    ├── clip_0001_x.txt
+    └── ...
+```
+
+**File-size tradeoff.** Default `--export-fs 4000` matches Shougat et al. 2023
+and produces ~270 KB per clip (20 000 floats at `%.6e`). Full ESC-50 with
+`--xy` ≈ 1 GB on disk. To keep the full 100 kHz integration fidelity in text,
+use `--export-fs 100000` (~12 MB per clip → ~50 GB for full ESC-50; the .npy
+cache is already lossless and ~half that size, so prefer the cache for that
+case).
+
+**Loading the export elsewhere:**
+
+```python
+import json, numpy as np
+from pathlib import Path
+
+root = Path("/Users/nic-spect/data/recho_ai/.../hopf_text/")
+manifest = json.loads((root / "manifest.json").read_text())
+labels = np.loadtxt(root / "labels.txt", dtype=int)
+class_names = manifest["class_names"]
+
+for entry in manifest["files"]:
+    x = np.loadtxt(root / entry["x_path"])      # (samples_per_clip,)
+    y = np.loadtxt(root / entry["y_path"]) if "y_path" in entry else None
+    label, name = entry["label"], entry["class_name"]
+    # ... feed into your model / train loop ...
+```
+
 ---
 
 ## Testing
