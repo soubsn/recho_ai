@@ -566,6 +566,71 @@ def export_dataset_text(
     return out_dir
 
 
+def load_dataset_from_text_cache(
+    cache_dir: Path | str,
+    target_class: str | None = None,
+) -> tuple[NDArray[np.float64], NDArray[np.int64], list[str], int]:
+    """
+    Load the Hopf-integrated ESC-50 dataset from the exported text cache.
+
+    Reads per-clip `clips/clip_XXXX_x.txt` files plus `labels.txt`,
+    `classes.txt`, and `manifest.json` as written by `export_dataset_text()`.
+    Clips are returned at the export sample rate recorded in the manifest
+    (typically 4 kHz — already downsampled from the 100 kHz integrator
+    output). Feed downstream with `process_dataset(..., downsample_factor=1)`.
+
+    Args:
+        cache_dir: directory containing manifest.json, labels.txt, classes.txt, clips/.
+        target_class: if set, relabel as a binary task — 1 where the source
+            class name equals target_class, else 0. The returned class_names
+            becomes [f"not_{target_class}", target_class].
+
+    Returns:
+        x_data: (n_clips, samples_per_clip) float64 at export_fs.
+        labels: (n_clips,) int64 — either the original 0..N-1 labels or binary.
+        class_names: list[str] — original names, or the two-element binary pair.
+        fs: int — sample rate of x_data (from manifest.export_fs).
+    """
+    cache_dir = Path(cache_dir)
+    with open(cache_dir / "manifest.json") as f:
+        manifest = json.load(f)
+
+    n_clips = int(manifest["n_clips"])
+    samples_per_clip = int(manifest["samples_per_clip"])
+    fs = int(manifest.get("export_fs", FS_TARGET))
+    class_names = list(manifest["class_names"])
+
+    labels = np.loadtxt(cache_dir / "labels.txt", dtype=np.int64)
+    if labels.shape != (n_clips,):
+        raise ValueError(
+            f"labels.txt has {labels.shape[0]} entries but manifest says {n_clips}"
+        )
+
+    print(f"[sample_data] Loading {n_clips} clips from {cache_dir} (fs={fs} Hz) ...")
+    x_data = np.zeros((n_clips, samples_per_clip), dtype=np.float64)
+    for i in range(n_clips):
+        x_path = cache_dir / "clips" / f"clip_{i:04d}_x.txt"
+        x_data[i] = np.loadtxt(x_path, dtype=np.float64)
+        if (i + 1) % 200 == 0 or i + 1 == n_clips:
+            print(f"  [{i + 1}/{n_clips}] loaded")
+
+    if target_class is not None:
+        if target_class not in class_names:
+            raise ValueError(
+                f"target_class={target_class!r} not in class_names={class_names}"
+            )
+        target_id = class_names.index(target_class)
+        labels = (labels == target_id).astype(np.int64)
+        pos = int(labels.sum())
+        print(
+            f"[sample_data] Binary relabel: {pos} positive ({target_class}), "
+            f"{n_clips - pos} negative — positive rate {pos / n_clips:.1%}"
+        )
+        class_names = [f"not_{target_class}", target_class]
+
+    return x_data, labels, class_names, fs
+
+
 def _class_factory(class_id: int, variation_seed: int) -> Callable[[float], float]:
     """Return an input signal function for the given class with slight variation."""
     rng = np.random.default_rng(variation_seed)

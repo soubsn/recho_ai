@@ -85,36 +85,72 @@ def _tile_to_length(x: NDArray[np.float64], target_len: int) -> NDArray[np.float
 def process_clip(
     raw_x: NDArray[np.float64],
     target_samples: int = SAMPLES_PER_CLIP,
+    downsample_factor: int = DOWNSAMPLE_FACTOR,
 ) -> NDArray[np.float64]:
     """
     Full ingestion pipeline for a single clip of raw x(t).
 
+    Pass downsample_factor=1 when the input is already at the 4 kHz target
+    rate (e.g. clips loaded from the exported hopf_text cache).
+
     Returns:
         2-D array of shape (N_TIME_STEPS, N_VIRTUAL_NODES) = (200, 100)
     """
-    ds = downsample(raw_x)
+    ds = raw_x if downsample_factor <= 1 else downsample(raw_x, factor=downsample_factor)
     ds = _tile_to_length(ds, target_samples)
     normed = normalise(ds)
     activated = atanh_activation(normed)
     return activated.reshape(N_TIME_STEPS, N_VIRTUAL_NODES)
 
 
+def remove_common_mode(raw_clips: NDArray[np.float64]) -> NDArray[np.float64]:
+    """
+    Subtract the dataset-wide mean clip from every clip.
+
+    The Hopf oscillator's limit cycle is nearly identical across clips (audio
+    perturbs it only weakly), so raw x(t) is dominated by a shared carrier
+    that uint8 feature scaling would otherwise crush the audio signal against.
+    Subtracting the mean clip exposes the per-clip audio-driven residual.
+
+    Args:
+        raw_clips: shape (n_clips, n_samples)
+
+    Returns:
+        Residuals with the same shape, zero-mean across the clip axis.
+    """
+    return raw_clips - raw_clips.mean(axis=0, keepdims=True)
+
+
 def process_dataset(
     raw_clips: NDArray[np.float64],
+    downsample_factor: int = DOWNSAMPLE_FACTOR,
+    subtract_common_mode: bool = False,
 ) -> NDArray[np.float64]:
     """
     Process a batch of raw x(t) clips.
 
     Args:
         raw_clips: shape (n_clips, n_hw_samples)
+        downsample_factor: 25 for 100 kHz raw; 1 for pre-downsampled 4 kHz.
+        subtract_common_mode: if True, subtract the dataset-wide mean clip
+            before per-clip processing so the audio-driven residual isn't
+            buried under the shared limit cycle.
 
     Returns:
         shape (n_clips, 200, 100) — feature maps ready for feature extraction
     """
+    if subtract_common_mode:
+        raw_std = raw_clips.std()
+        raw_clips = remove_common_mode(raw_clips)
+        res_std = raw_clips.std()
+        print(
+            f"[ingest] common-mode removed: raw std={raw_std:.4f} "
+            f"residual std={res_std:.4f} ratio={raw_std / res_std:.1f}x"
+        )
     n_clips = raw_clips.shape[0]
     out = np.zeros((n_clips, N_TIME_STEPS, N_VIRTUAL_NODES), dtype=np.float64)
     for i in range(n_clips):
-        out[i] = process_clip(raw_clips[i])
+        out[i] = process_clip(raw_clips[i], downsample_factor=downsample_factor)
     return out
 
 

@@ -121,23 +121,55 @@ def visualise_features(
     plt.close(fig)
 
 
+ESC50_HOPF_TEXT_CACHE: Path = Path(
+    "/Users/nic-spect/data/recho_ai/Kaggle_Environmental_Sound_Classification_50/hopf_text"
+)
+# Classes to visualise (must exist in manifest.json class_names). One per subplot.
+CLASSES_TO_VISUALISE: list[str] = ["sheep", "dog", "cow", "cat", "rooster"]
+# Match what train.py uses so the viz reflects the model's actual input.
+SUBTRACT_COMMON_MODE: bool = True
+
+
 def main() -> None:
-    """Run feature extraction on synthetic data."""
+    """Run feature extraction on the ESC-50 hopf_text cache and visualise a subset."""
     import sys
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from data.sample_data import generate_dataset, CLASS_NAMES
-    from pipeline.ingest import process_dataset
+    from data.sample_data import load_dataset_from_text_cache
+    from pipeline.ingest import process_dataset, FS_HW, FS_TARGET
 
-    print("[features] Generating small synthetic dataset ...")
-    raw_x, labels = generate_dataset(n_clips_per_class=5, n_classes=5, cache=False)
-    processed = process_dataset(raw_x)
+    print(f"[features] Loading hopf_text cache from {ESC50_HOPF_TEXT_CACHE} ...")
+    raw_x, labels, class_names, fs = load_dataset_from_text_cache(
+        cache_dir=ESC50_HOPF_TEXT_CACHE,
+    )
+
+    ds_factor = 1 if fs == FS_TARGET else FS_HW // fs
+    print(
+        f"[features] Processing clips (downsample_factor={ds_factor}, "
+        f"subtract_common_mode={SUBTRACT_COMMON_MODE}) ..."
+    )
+    processed = process_dataset(
+        raw_x,
+        downsample_factor=ds_factor,
+        subtract_common_mode=SUBTRACT_COMMON_MODE,
+    )
 
     out_dir = Path(__file__).resolve().parent.parent / "output" / "features"
     feature_maps, labels = extract_features(processed, labels, output_dir=out_dir)
     print(f"  Feature maps: shape={feature_maps.shape}, dtype={feature_maps.dtype}")
     print(f"  Range: [{feature_maps.min()}, {feature_maps.max()}]")
 
-    visualise_features(feature_maps, labels, CLASS_NAMES, output_dir=out_dir)
+    # Subset to the requested classes; relabel to contiguous 0..N-1 for the plot.
+    missing = [c for c in CLASSES_TO_VISUALISE if c not in class_names]
+    if missing:
+        raise ValueError(f"classes not in manifest: {missing}")
+    orig_ids = [class_names.index(c) for c in CLASSES_TO_VISUALISE]
+    mask = np.isin(labels, orig_ids)
+    subset_fm = feature_maps[mask]
+    subset_labels = np.zeros(int(mask.sum()), dtype=np.int64)
+    for new_id, orig_id in enumerate(orig_ids):
+        subset_labels[labels[mask] == orig_id] = new_id
+
+    visualise_features(subset_fm, subset_labels, CLASSES_TO_VISUALISE, output_dir=out_dir)
 
 
 if __name__ == "__main__":

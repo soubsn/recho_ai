@@ -60,11 +60,56 @@ def representative_data_gen(
         yield [sample]
 
 
+def balance_binary(
+    feature_maps: NDArray[np.uint8],
+    labels: NDArray[np.int64],
+    target_positive_rate: float = 0.5,
+    seed: int = 0,
+) -> tuple[NDArray[np.uint8], NDArray[np.int64]]:
+    """
+    Undersample the negative class so positives make up `target_positive_rate`
+    of the returned dataset.
+
+    All positives are kept; negatives are randomly dropped. If the current
+    positive rate already meets or exceeds the target, nothing is dropped.
+
+    Args:
+        target_positive_rate: desired positive fraction in (0, 1). 0.5 = 50/50.
+        seed: RNG seed for reproducible negative selection.
+
+    Returns:
+        (feature_maps, labels) — subsampled and shuffled jointly.
+    """
+    if not 0.0 < target_positive_rate < 1.0:
+        raise ValueError(f"target_positive_rate must be in (0, 1), got {target_positive_rate}")
+    pos_idx = np.where(labels == 1)[0]
+    neg_idx = np.where(labels == 0)[0]
+    n_pos = len(pos_idx)
+    n_neg = len(neg_idx)
+    if n_pos == 0:
+        raise ValueError("no positive examples — cannot balance")
+
+    n_neg_target = int(round(n_pos * (1.0 - target_positive_rate) / target_positive_rate))
+    n_neg_keep = min(n_neg_target, n_neg)
+
+    rng = np.random.default_rng(seed)
+    neg_keep = rng.choice(neg_idx, size=n_neg_keep, replace=False)
+    keep = np.concatenate([pos_idx, neg_keep])
+    rng.shuffle(keep)
+
+    actual_rate = n_pos / (n_pos + n_neg_keep)
+    print(
+        f"[train] Balanced: kept {n_pos} pos + {n_neg_keep}/{n_neg} neg "
+        f"(target_rate={target_positive_rate:.2f}, actual={actual_rate:.2f})"
+    )
+    return feature_maps[keep], labels[keep]
+
+
 def prepare_data(
     feature_maps: NDArray[np.uint8],
     labels: NDArray[np.int64],
     n_classes: int = 5,
-    val_split: float = 0.2,
+    val_split: float = 0.1,
 ) -> tuple[NDArray[np.float32], NDArray[np.float32], NDArray[np.float32], NDArray[np.float32]]:
     """
     Prepare feature maps and labels for training.
@@ -103,7 +148,7 @@ def train(
     checkpoint by validation accuracy.
     """
     model.compile(
-        optimizer=keras.optimizers.Adam(learning_rate=1e-3),
+        optimizer=keras.optimizers.Adam(learning_rate=1e-5, clipnorm=1.0),
         loss="categorical_crossentropy",
         metrics=["accuracy"],
     )
@@ -114,7 +159,7 @@ def train(
         ckpt_path.mkdir(parents=True, exist_ok=True)
         callbacks.append(
             keras.callbacks.ModelCheckpoint(
-                filepath=str(ckpt_path / "best_model.keras"),
+                filepath=str(ckpt_path / "best_model.h5"),
                 monitor="val_accuracy",
                 save_best_only=True,
                 verbose=1,
@@ -126,8 +171,9 @@ def train(
         validation_data=(x_val, y_val),
         epochs=epochs,
         batch_size=batch_size,
+        shuffle=True,
         callbacks=callbacks,
-        verbose=1,
+        verbose=2,
     )
 
     # Print per-layer output shape and parameter count
@@ -142,22 +188,60 @@ def train(
     return history
 
 
+ESC50_HOPF_TEXT_CACHE: Path = Path(
+    "/Users/nic-spect/data/recho_ai/Kaggle_Environmental_Sound_Classification_50/hopf_text"
+)
+TARGET_CLASS: str = "sheep"
+# Positive fraction after balancing. 0.5 = 50/50; None = no undersampling.
+TARGET_POSITIVE_RATE: float | None = 0.5
+# Subtract the dataset-wide mean clip before feature extraction so the
+# audio-driven residual isn't buried under the Hopf oscillator's limit cycle.
+SUBTRACT_COMMON_MODE: bool = True
+
+
 def main() -> None:
-    """End-to-end QAT training on synthetic data."""
+    """
+    Binary QAT training on the ESC-50 hopf_text cache.
+
+    Labels are relabeled to 1 for TARGET_CLASS and 0 for every other class,
+    giving a one-vs-all detector. Class imbalance is steep (40/2000 ≈ 2%);
+    val_accuracy alone is not a useful metric — inspect per-class recall
+    in the fit history or add class_weight/metrics as a follow-up.
+    """
     import sys
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from data.sample_data import generate_dataset
-    from pipeline.ingest import process_dataset
+    from data.sample_data import load_dataset_from_text_cache
+    from pipeline.ingest import process_dataset, FS_HW, FS_TARGET
     from pipeline.features import extract_features
     from pipeline.model import build_model
 
-    print("[train] Generating synthetic data (small) ...")
-    raw_x, labels = generate_dataset(n_clips_per_class=20, n_classes=5, cache=False)
-    processed = process_dataset(raw_x)
+    print(f"[train] Loading hopf_text cache from {ESC50_HOPF_TEXT_CACHE} ...")
+    raw_x, labels, class_names, fs = load_dataset_from_text_cache(
+        cache_dir=ESC50_HOPF_TEXT_CACHE,
+        target_class=TARGET_CLASS,
+    )
+    print(f"  raw_x: {raw_x.shape}, fs={fs} Hz, classes={class_names}")
+
+    ds_factor = 1 if fs == FS_TARGET else FS_HW // fs
+    print(
+        f"[train] Processing clips (downsample_factor={ds_factor}, "
+        f"subtract_common_mode={SUBTRACT_COMMON_MODE}) ..."
+    )
+    processed = process_dataset(
+        raw_x,
+        downsample_factor=ds_factor,
+        subtract_common_mode=SUBTRACT_COMMON_MODE,
+    )
     feature_maps, labels = extract_features(processed, labels)
 
-    print("[train] Building model ...")
-    model = build_model(n_classes=5)
+    if TARGET_POSITIVE_RATE is not None:
+        feature_maps, labels = balance_binary(
+            feature_maps, labels, target_positive_rate=TARGET_POSITIVE_RATE
+        )
+
+    n_classes = 2
+    print(f"[train] Building model (n_classes={n_classes}) ...")
+    model = build_model(n_classes=n_classes)
 
     print("[train] Applying quantisation-aware training ...")
     try:
@@ -167,13 +251,13 @@ def main() -> None:
         print("  Training without QAT. Install with: pip install tensorflow-model-optimization")
         qat_model = model
 
-    x_train, y_train, x_val, y_val = prepare_data(feature_maps, labels, n_classes=5)
+    x_train, y_train, x_val, y_val = prepare_data(feature_maps, labels, n_classes=n_classes)
     print(f"  Train: {x_train.shape}, Val: {x_val.shape}")
 
     ckpt_dir = Path(__file__).resolve().parent.parent / "output" / "checkpoints"
     history = train(
         qat_model, x_train, y_train, x_val, y_val,
-        epochs=10, batch_size=8, checkpoint_dir=ckpt_dir,
+        epochs=20, batch_size=4, checkpoint_dir=ckpt_dir,
     )
 
     print(f"\n[train] Final val_accuracy: {history.history['val_accuracy'][-1]:.4f}")
