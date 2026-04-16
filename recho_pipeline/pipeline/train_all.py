@@ -80,6 +80,13 @@ class TrainConfig:
     run_sequence: bool = True
     run_fewshot: bool = True
     run_keras: bool = True  # run original CNN models A-F
+    # Data source — synthetic Hopf or real ESC-50 audio
+    source: str = "synthetic"            # "synthetic" | "esc50"
+    esc50_root: Optional[Path] = None    # default: ESC50_DEFAULT_ROOT
+    esc10: bool = True                   # 10-class subset of ESC-50
+    max_clips_per_class: Optional[int] = 10  # None -> all
+    workers: Optional[int] = None        # None -> cpu_count - 2
+    cache_dir: Optional[Path] = None     # None -> <esc50_root>/hopf_cache/
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -227,7 +234,10 @@ def train_all(cfg: TrainConfig) -> dict[str, dict]:
     import tensorflow as tf
     from sklearn.metrics import f1_score as sklearn_f1
 
-    from data.sample_data import generate_dataset_xy, CLASS_NAMES
+    from data.sample_data import (
+        generate_dataset_xy, generate_dataset_xy_esc50,
+        CLASS_NAMES as SYNTH_CLASS_NAMES, ESC50_DEFAULT_ROOT,
+    )
     from pipeline.ingest import process_dataset
     from pipeline.features_xy import extract_y_features, extract_all_representations
 
@@ -240,13 +250,27 @@ def train_all(cfg: TrainConfig) -> dict[str, dict]:
     # -------------------------------------------------------------------------
     # 1. Generate / load data
     # -------------------------------------------------------------------------
-    print("\n[train_all] Loading dataset ...")
-    raw_x, raw_y, labels = generate_dataset_xy(
-        n_clips_per_class=cfg.n_clips_per_class,
-        n_classes=cfg.n_classes,
-        cache=cfg.cache_data,
-    )
+    print(f"\n[train_all] Loading dataset (source={cfg.source}) ...")
+    if cfg.source == "esc50":
+        raw_x, raw_y, labels, class_names = generate_dataset_xy_esc50(
+            esc50_root=cfg.esc50_root or ESC50_DEFAULT_ROOT,
+            esc10=cfg.esc10,
+            max_clips_per_class=cfg.max_clips_per_class,
+            cache=cfg.cache_data,
+            workers=cfg.workers,
+            cache_dir=cfg.cache_dir,
+        )
+        # ESC-50 determines class count from data, not config
+        cfg.n_classes = len(class_names)
+    else:
+        raw_x, raw_y, labels = generate_dataset_xy(
+            n_clips_per_class=cfg.n_clips_per_class,
+            n_classes=cfg.n_classes,
+            cache=cfg.cache_data,
+        )
+        class_names = list(SYNTH_CLASS_NAMES[: cfg.n_classes])
     print(f"  raw_x: {raw_x.shape}, raw_y: {raw_y.shape}, labels: {labels.shape}")
+    print(f"  classes ({len(class_names)}): {class_names}")
 
     # -------------------------------------------------------------------------
     # 2. Ingest: processed feature maps
@@ -481,14 +505,13 @@ def train_all(cfg: TrainConfig) -> dict[str, dict]:
 
         # Random Forest
         from pipeline.models.ml.random_forest import RandomForestModel
-        from data.sample_data import CLASS_NAMES
         print("\n[train_all] Random Forest (28 features) ...")
         t0 = time.time()
         rf = RandomForestModel(n_estimators=100, max_depth=8)
         rf.fit(x_ds[train_idx], y_ds[train_idx], labels_train)
         val_acc_rf = rf.score(x_ds[val_idx], y_ds[val_idx], labels_val)
         rf.save()
-        rf.export_firmware_header(class_names=CLASS_NAMES)
+        rf.export_firmware_header(class_names=class_names)
         _record("random_forest", "ML", val_acc_rf, train_time=time.time() - t0)
         print(f"  Random Forest val_acc: {val_acc_rf:.4f}")
 
@@ -649,7 +672,7 @@ def train_all(cfg: TrainConfig) -> dict[str, dict]:
 
         # Prototypical Network (PCA encoder)
         from pipeline.models.fewshot.prototypical import PrototypicalNetwork
-        from data.sample_data import CLASS_NAMES as _CN
+        _CN = class_names
         print("\n[train_all] Prototypical Network (5-shot) ...")
         t0 = time.time()
         support_set: dict[str, NDArray] = {}
@@ -771,7 +794,23 @@ def main() -> None:
     parser.add_argument("--skip_anomaly", action="store_true")
     parser.add_argument("--skip_sequence", action="store_true")
     parser.add_argument("--skip_fewshot", action="store_true")
+    parser.add_argument("--source", choices=["synthetic", "esc50"], default="synthetic",
+                        help="Data source: synthetic Hopf or real ESC-50 audio.")
+    parser.add_argument("--esc50_root", type=Path, default=None,
+                        help="Override ESC-50 dataset root (default: built-in).")
+    parser.add_argument("--esc50_full", action="store_true",
+                        help="Use the full 50-class ESC-50 (default: ESC-10 subset).")
+    parser.add_argument("--max_clips_per_class", type=int, default=10,
+                        help="Cap clips per class for ESC-50. Use -1 for all.")
+    parser.add_argument("--workers", type=int, default=-1,
+                        help="Parallel integration workers for ESC-50. -1 = cpu_count-2.")
+    parser.add_argument("--cache_dir", type=Path, default=None,
+                        help="Cache directory for ESC-50 .npy files. "
+                             "Default: <esc50_root>/hopf_cache/.")
     args = parser.parse_args()
+
+    cap = None if args.max_clips_per_class < 0 else args.max_clips_per_class
+    workers = None if args.workers < 0 else args.workers
 
     cfg = TrainConfig(
         epochs=args.epochs,
@@ -786,6 +825,12 @@ def main() -> None:
         run_anomaly=not args.skip_anomaly,
         run_sequence=not args.skip_sequence,
         run_fewshot=not args.skip_fewshot,
+        source=args.source,
+        esc50_root=args.esc50_root,
+        esc10=not args.esc50_full,
+        max_clips_per_class=cap,
+        workers=workers,
+        cache_dir=args.cache_dir,
     )
     print("[train_all] Config:")
     for k, v in asdict(cfg).items():

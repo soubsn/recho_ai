@@ -14,7 +14,10 @@ Parameters: mu=5, A=0.5, Omega=40*pi, omega=40*pi
 
 from __future__ import annotations
 
+import argparse
+import csv
 import hashlib
+import multiprocessing as mp
 import os
 from pathlib import Path
 from typing import Callable
@@ -22,6 +25,8 @@ from typing import Callable
 import numpy as np
 from numpy.typing import NDArray
 from scipy.integrate import solve_ivp
+from scipy.io import wavfile
+from scipy.signal import resample_poly
 
 
 # Hopf oscillator parameters — exact values from paper 2
@@ -163,6 +168,309 @@ def _make_noise(amp: float = 0.2, seed: int = 0) -> Callable[[float], float]:
 CLASS_NAMES: list[str] = ["sine", "two_sines", "square", "chirp", "noise"]
 
 
+# ---------------------------------------------------------------------------
+# ESC-50 audio loader — real-world environmental sounds as Hopf input
+# ---------------------------------------------------------------------------
+
+ESC50_DEFAULT_ROOT: Path = Path(
+    "/Users/nic-spect/data/recho_ai/Kaggle_Environmental_Sound_Classification_50"
+)
+ESC50_NATIVE_FS: int = 44_100  # native ESC-50 sample rate
+ESC50_AUDIO_FS: int = FS_TARGET  # 4 kHz, per Shougat et al. 2023
+ESC50_CLIP_DURATION: float = 5.0  # seconds — full ESC-50 clip length
+
+
+def default_esc50_cache_dir(esc50_root: Path | str = ESC50_DEFAULT_ROOT) -> Path:
+    """Default cache location for ESC-50 Hopf outputs — lives alongside the
+    source dataset so multiple training runs can reuse the cached integration."""
+    return Path(esc50_root) / "hopf_cache"
+
+
+def _integrate_clip_worker(args: tuple[int, str, bool]) -> tuple:
+    """
+    Pool worker: load one wav, integrate Hopf, return (idx, x[, y]).
+
+    Declared at module scope so it pickles cleanly for multiprocessing.
+    Uses ESC50_CLIP_DURATION and ESC50_AUDIO_FS constants.
+    """
+    idx, wav_path_str, want_xy = args
+    audio = _load_wav_at_4khz(Path(wav_path_str))
+    a_func = _make_audio_signal(audio, fs=ESC50_AUDIO_FS)
+    if want_xy:
+        x, y = integrate_hopf_xy(a_func, duration=ESC50_CLIP_DURATION)
+        return idx, x, y
+    x = integrate_hopf(a_func, duration=ESC50_CLIP_DURATION)
+    return idx, x
+
+
+def _read_esc50_csv(csv_path: Path) -> list[dict[str, str]]:
+    """Read esc50.csv as a list of row dicts."""
+    with open(csv_path, newline="") as f:
+        return list(csv.DictReader(f))
+
+
+def _load_wav_at_4khz(wav_path: Path) -> NDArray[np.float64]:
+    """
+    Load a wav file and resample to 4 kHz audio (the rate fed to the
+    Hopf reservoir in Shougat et al. 2023).
+
+    Returns mono float64 audio in [-1, +1], length = 4000 * 5 = 20000.
+    """
+    sr, x = wavfile.read(wav_path)
+    if x.ndim > 1:
+        x = x.mean(axis=1)
+    if np.issubdtype(x.dtype, np.integer):
+        max_val = float(np.iinfo(x.dtype).max)
+        x = x.astype(np.float64) / max_val
+    else:
+        x = x.astype(np.float64)
+    if sr != ESC50_AUDIO_FS:
+        # 44100 -> 4000 has gcd 100, so up=40 down=441
+        from math import gcd
+        g = gcd(sr, ESC50_AUDIO_FS)
+        x = resample_poly(x, ESC50_AUDIO_FS // g, sr // g)
+    return x
+
+
+def _make_audio_signal(audio: NDArray[np.float64], fs: int = ESC50_AUDIO_FS) -> Callable[[float], float]:
+    """
+    Wrap a discrete audio waveform as the continuous a(t) drive function
+    consumed by the Hopf integrator. Uses linear interpolation between
+    samples — closer to a physical analog signal than zero-order hold.
+    """
+    n = len(audio)
+    duration = n / fs
+
+    def a(t: float) -> float:
+        if t <= 0.0:
+            return float(audio[0])
+        if t >= duration:
+            return float(audio[-1])
+        pos = t * fs
+        i0 = int(pos)
+        if i0 >= n - 1:
+            return float(audio[-1])
+        frac = pos - i0
+        return float(audio[i0] * (1.0 - frac) + audio[i0 + 1] * frac)
+
+    return a
+
+
+def _select_esc50_rows(
+    rows: list[dict[str, str]],
+    esc10: bool,
+    max_clips_per_class: int | None,
+) -> tuple[list[dict[str, str]], list[str]]:
+    """
+    Filter rows for esc10 (curated 10-class subset) if requested,
+    cap clips per class, and return (filtered_rows, class_names).
+    Class IDs in the returned rows are remapped to a contiguous 0..N-1.
+    """
+    if esc10:
+        rows = [r for r in rows if r["esc10"].strip().lower() == "true"]
+
+    # Build sorted unique categories so label IDs are stable across runs.
+    categories = sorted({r["category"] for r in rows})
+    cat_to_id = {c: i for i, c in enumerate(categories)}
+
+    # Cap per class.
+    by_cls: dict[int, list[dict[str, str]]] = {}
+    for r in rows:
+        cid = cat_to_id[r["category"]]
+        r = dict(r)
+        r["_class_id"] = str(cid)
+        by_cls.setdefault(cid, []).append(r)
+
+    selected: list[dict[str, str]] = []
+    for cid in sorted(by_cls):
+        clips = by_cls[cid]
+        if max_clips_per_class is not None:
+            clips = clips[:max_clips_per_class]
+        selected.extend(clips)
+
+    return selected, categories
+
+
+def _default_workers() -> int:
+    """Default worker count: leave 2 cores free for the OS / main process."""
+    return max(1, (os.cpu_count() or 4) - 2)
+
+
+def _run_integration_pool(
+    rows: list[dict[str, str]],
+    audio_dir: Path,
+    want_xy: bool,
+    workers: int,
+):
+    """
+    Run Hopf integration across ESC-50 rows, optionally in parallel.
+
+    Yields (idx, x) or (idx, x, y) tuples as they complete. Order is not
+    guaranteed — caller must write results by idx.
+    """
+    tasks = [(i, str(audio_dir / r["filename"]), want_xy) for i, r in enumerate(rows)]
+    if workers <= 1:
+        for t in tasks:
+            yield _integrate_clip_worker(t)
+        return
+    ctx = mp.get_context("spawn")  # safe on macOS; avoids fork+numpy/BLAS issues
+    with ctx.Pool(processes=workers) as pool:
+        for result in pool.imap_unordered(_integrate_clip_worker, tasks, chunksize=1):
+            yield result
+
+
+def generate_dataset_esc50(
+    esc50_root: Path | str = ESC50_DEFAULT_ROOT,
+    esc10: bool = True,
+    max_clips_per_class: int | None = 10,
+    cache: bool = True,
+    workers: int | None = None,
+    cache_dir: Path | str | None = None,
+) -> tuple[NDArray[np.float64], NDArray[np.int64], list[str]]:
+    """
+    Run real ESC-50 audio through the Hopf reservoir.
+
+    For each ESC-50 clip: resample 44.1 kHz wav to 4 kHz, drive the
+    Hopf ODE with that audio, return raw x(t) at 100 kHz.
+
+    Memory note: each 5-s clip at 100 kHz is ~4 MB float64. Default
+    max_clips_per_class=10 keeps the run small for first iteration.
+    Set max_clips_per_class=None for full ESC-50 (~8 GB, hours).
+
+    Args:
+        workers: parallel integration workers. None -> cpu_count - 2.
+        cache_dir: where to read/write .npy caches. None -> <esc50_root>/hopf_cache/.
+
+    Returns:
+        x_data: (n_clips, 500_000) raw x(t) at 100 kHz
+        labels: (n_clips,) integer class labels (contiguous 0..N-1)
+        class_names: ESC-50 category names indexed by label
+    """
+    esc50_root = Path(esc50_root)
+    csv_path = esc50_root / "esc50.csv"
+    audio_dir = esc50_root / "audio"
+    cache_root = Path(cache_dir) if cache_dir is not None else default_esc50_cache_dir(esc50_root)
+    if workers is None:
+        workers = _default_workers()
+
+    rows = _read_esc50_csv(csv_path)
+    rows, class_names = _select_esc50_rows(rows, esc10, max_clips_per_class)
+    n_classes = len(class_names)
+    total = len(rows)
+
+    cap = "all" if max_clips_per_class is None else str(max_clips_per_class)
+    subset = "esc10" if esc10 else "esc50"
+    cache_key = f"esc50_{subset}_n{cap}_c{n_classes}"
+    cache_x = cache_root / f"{cache_key}_x.npy"
+    cache_labels = cache_root / f"{cache_key}_labels.npy"
+    cache_names = cache_root / f"{cache_key}_classes.txt"
+
+    if cache and cache_x.exists() and cache_labels.exists() and cache_names.exists():
+        print(f"[sample_data] Loading cached ESC-50 dataset from {cache_root}")
+        names = cache_names.read_text().splitlines()
+        return np.load(cache_x), np.load(cache_labels), names
+
+    print(
+        f"[sample_data] Generating ESC-50 dataset: {n_classes} classes, "
+        f"{total} clips ({subset}, cap={cap}, workers={workers})"
+    )
+    n_samples = int(ESC50_CLIP_DURATION * FS_HW)
+    x_data = np.zeros((total, n_samples), dtype=np.float64)
+    labels = np.zeros(total, dtype=np.int64)
+    for i, row in enumerate(rows):
+        labels[i] = int(row["_class_id"])
+
+    done = 0
+    for result in _run_integration_pool(rows, audio_dir, want_xy=False, workers=workers):
+        idx, x = result
+        x_data[idx] = x
+        done += 1
+        if done % 10 == 0 or done == total:
+            print(f"  [{done}/{total}] last: {rows[idx]['filename']} "
+                  f"-> class {labels[idx]} ({rows[idx]['category']})")
+
+    if cache:
+        cache_root.mkdir(parents=True, exist_ok=True)
+        np.save(cache_x, x_data)
+        np.save(cache_labels, labels)
+        cache_names.write_text("\n".join(class_names))
+        print(f"[sample_data] Cached ESC-50 dataset to {cache_root}")
+
+    return x_data, labels, class_names
+
+
+def generate_dataset_xy_esc50(
+    esc50_root: Path | str = ESC50_DEFAULT_ROOT,
+    esc10: bool = True,
+    max_clips_per_class: int | None = 10,
+    cache: bool = True,
+    workers: int | None = None,
+    cache_dir: Path | str | None = None,
+) -> tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.int64], list[str]]:
+    """
+    Same as generate_dataset_esc50 but captures both x(t) and y(t)
+    quadrature states from the Hopf integrator in a single pass.
+
+    Memory: ~2x generate_dataset_esc50 (both x and y stored).
+    """
+    esc50_root = Path(esc50_root)
+    csv_path = esc50_root / "esc50.csv"
+    audio_dir = esc50_root / "audio"
+    cache_root = Path(cache_dir) if cache_dir is not None else default_esc50_cache_dir(esc50_root)
+    if workers is None:
+        workers = _default_workers()
+
+    rows = _read_esc50_csv(csv_path)
+    rows, class_names = _select_esc50_rows(rows, esc10, max_clips_per_class)
+    n_classes = len(class_names)
+    total = len(rows)
+
+    cap = "all" if max_clips_per_class is None else str(max_clips_per_class)
+    subset = "esc10" if esc10 else "esc50"
+    cache_key = f"esc50_xy_{subset}_n{cap}_c{n_classes}"
+    cache_x = cache_root / f"{cache_key}_x.npy"
+    cache_y_state = cache_root / f"{cache_key}_y_state.npy"
+    cache_labels = cache_root / f"{cache_key}_labels.npy"
+    cache_names = cache_root / f"{cache_key}_classes.txt"
+
+    if (cache and cache_x.exists() and cache_y_state.exists()
+            and cache_labels.exists() and cache_names.exists()):
+        print(f"[sample_data] Loading cached ESC-50 XY dataset from {cache_root}")
+        names = cache_names.read_text().splitlines()
+        return np.load(cache_x), np.load(cache_y_state), np.load(cache_labels), names
+
+    print(
+        f"[sample_data] Generating ESC-50 XY dataset: {n_classes} classes, "
+        f"{total} clips ({subset}, cap={cap}, workers={workers})"
+    )
+    n_samples = int(ESC50_CLIP_DURATION * FS_HW)
+    x_data = np.zeros((total, n_samples), dtype=np.float64)
+    y_data = np.zeros((total, n_samples), dtype=np.float64)
+    labels = np.zeros(total, dtype=np.int64)
+    for i, row in enumerate(rows):
+        labels[i] = int(row["_class_id"])
+
+    done = 0
+    for result in _run_integration_pool(rows, audio_dir, want_xy=True, workers=workers):
+        idx, x, y = result
+        x_data[idx] = x
+        y_data[idx] = y
+        done += 1
+        if done % 10 == 0 or done == total:
+            print(f"  [{done}/{total}] last: {rows[idx]['filename']} "
+                  f"-> class {labels[idx]} ({rows[idx]['category']})")
+
+    if cache:
+        cache_root.mkdir(parents=True, exist_ok=True)
+        np.save(cache_x, x_data)
+        np.save(cache_y_state, y_data)
+        np.save(cache_labels, labels)
+        cache_names.write_text("\n".join(class_names))
+        print(f"[sample_data] Cached ESC-50 XY dataset to {cache_root}")
+
+    return x_data, y_data, labels, class_names
+
+
 def _class_factory(class_id: int, variation_seed: int) -> Callable[[float], float]:
     """Return an input signal function for the given class with slight variation."""
     rng = np.random.default_rng(variation_seed)
@@ -281,13 +589,63 @@ def generate_dataset(
     return x_data, labels
 
 
+def _parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="Generate Hopf reservoir input dataset.")
+    p.add_argument(
+        "--source", choices=["synthetic", "esc50"], default="synthetic",
+        help="synthetic: 5-class sine/square/chirp/etc. esc50: real audio from ESC-50.",
+    )
+    p.add_argument(
+        "--esc50-root", type=Path, default=ESC50_DEFAULT_ROOT,
+        help="Path to ESC-50 dataset root (containing esc50.csv and audio/).",
+    )
+    p.add_argument(
+        "--esc10", action="store_true",
+        help="Use the curated 10-class ESC-10 subset instead of full 50-class ESC-50.",
+    )
+    p.add_argument(
+        "--max-clips-per-class", type=int, default=10,
+        help="Cap clips per class. Use -1 for all (warning: full ESC-50 is ~8 GB and hours).",
+    )
+    p.add_argument(
+        "--workers", type=int, default=-1,
+        help="Parallel integration workers. -1 = cpu_count-2 (default).",
+    )
+    p.add_argument(
+        "--cache-dir", type=Path, default=None,
+        help="Directory for .npy caches. Default: <esc50-root>/hopf_cache/ for esc50, "
+             "<repo>/data/cache/ for synthetic.",
+    )
+    p.add_argument("--no-cache", action="store_true", help="Disable .npy cache load/store.")
+    return p.parse_args()
+
+
 def main() -> None:
-    """Generate and summarise the synthetic dataset."""
-    x_data, labels = generate_dataset()
-    print(f"\nDataset shape: x={x_data.shape}, labels={labels.shape}")
-    for cls in range(N_CLASSES):
-        count = int(np.sum(labels == cls))
-        print(f"  Class {cls} ({CLASS_NAMES[cls]}): {count} clips")
+    """Generate and summarise the dataset (synthetic or ESC-50)."""
+    args = _parse_args()
+    cache = not args.no_cache
+    cap = None if args.max_clips_per_class < 0 else args.max_clips_per_class
+    workers = None if args.workers < 0 else args.workers
+
+    if args.source == "synthetic":
+        x_data, labels = generate_dataset(cache=cache)
+        print(f"\nDataset shape: x={x_data.shape}, labels={labels.shape}")
+        for cls in range(N_CLASSES):
+            count = int(np.sum(labels == cls))
+            print(f"  Class {cls} ({CLASS_NAMES[cls]}): {count} clips")
+    else:
+        x_data, labels, class_names = generate_dataset_esc50(
+            esc50_root=args.esc50_root,
+            esc10=args.esc10,
+            max_clips_per_class=cap,
+            cache=cache,
+            workers=workers,
+            cache_dir=args.cache_dir,
+        )
+        print(f"\nDataset shape: x={x_data.shape}, labels={labels.shape}")
+        for cls, name in enumerate(class_names):
+            count = int(np.sum(labels == cls))
+            print(f"  Class {cls} ({name}): {count} clips")
     print(f"  Sample range: [{x_data.min():.4f}, {x_data.max():.4f}]")
 
 

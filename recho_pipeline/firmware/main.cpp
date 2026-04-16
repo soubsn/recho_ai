@@ -60,6 +60,15 @@
  * tighter, or up if you see kTfLiteError on AllocateTensors().
  *
  * Rule of thumb: arena = model_weights + largest_activation_tensor + 4 KB overhead
+ *
+ * Remember the arena is only part of the total RAM budget. On top of the
+ * arena you pay for:
+ *   - preproc_ds[] + preproc_activated[] = 160 KB of static BSS (see below)
+ *   - adc_buf[2][ADC_BUF_SAMPLES]         = 2 × ADC_BUF_SAMPLES × 2 bytes
+ *   - the feature_map[] staging buffer    = 20,000 bytes
+ * If your target cannot host all three plus the arena, you will need to
+ * move adc_buf[] into external SDRAM or stream-preprocess instead of
+ * double-buffering five seconds of raw ADC.
  * ------------------------------------------------------------------------- */
 #if defined(__ARM_ARCH) && (__ARM_ARCH == 7)  /* Cortex-M4 */
     #define TENSOR_ARENA_SIZE   (40 * 1024)   /* 40 KB — fits within 48 KB budget */
@@ -101,6 +110,21 @@ static volatile uint8_t  frame_ready    = 0;       /* set by DMA complete ISR */
 /* Feature map: uint8 200×100, then converted to int8 in-place */
 static int8_t feature_map[N_TIME_STEPS * N_VIRTUAL_NODES];
 
+/*
+ * Preprocessing scratch buffers — file-scope static, NOT on the stack.
+ *
+ * Each array is 20,000 floats × 4 bytes = 80 KB. Putting them on the stack
+ * inside preprocess() would overflow every target in this package's profile
+ * (the M4 tier has only 48 KB of RAM in total). Keep them as static BSS so
+ * the linker places them in RAM exactly once at known offsets.
+ *
+ * Total static preprocessing RAM = 2 × 80 KB = 160 KB. This is on top of
+ * TENSOR_ARENA_SIZE and the ADC buffers — verify board-level RAM budget
+ * before deployment.
+ */
+static float preproc_ds[FEATURE_SAMPLES];
+static float preproc_activated[FEATURE_SAMPLES];
+
 /* -------------------------------------------------------------------------
  * TFLite Micro globals
  * ------------------------------------------------------------------------- */
@@ -135,16 +159,19 @@ static volatile int8_t result_class = -1;
 
 static void preprocess(const uint16_t *raw, int8_t *out)
 {
+    /* Uses file-scope static preproc_ds[] and preproc_activated[] — see
+     * declarations above. Do NOT convert these back to locals; each array
+     * is 80 KB and the M4 tier has only 48 KB of RAM total. */
+
     /* --- Step 1: skip-sample to 4 kHz --- */
-    float ds[FEATURE_SAMPLES];
     for (uint32_t i = 0; i < FEATURE_SAMPLES; i++) {
-        ds[i] = (float)raw[i * DOWNSAMPLE_FACTOR];
+        preproc_ds[i] = (float)raw[i * DOWNSAMPLE_FACTOR];
     }
 
     /* --- Step 2: normalise to [-1, +1] --- */
     float peak = 0.0f;
     for (uint32_t i = 0; i < FEATURE_SAMPLES; i++) {
-        float v = ds[i] < 0.0f ? -ds[i] : ds[i];
+        float v = preproc_ds[i] < 0.0f ? -preproc_ds[i] : preproc_ds[i];
         if (v > peak) peak = v;
     }
     if (peak < 1e-12f) {
@@ -152,17 +179,17 @@ static void preprocess(const uint16_t *raw, int8_t *out)
         return;
     }
     for (uint32_t i = 0; i < FEATURE_SAMPLES; i++) {
-        ds[i] /= peak;
+        preproc_ds[i] /= peak;
     }
 
     /* --- Step 3: atanh activation (eq. 6) --- */
     float mean = 0.0f;
-    for (uint32_t i = 0; i < FEATURE_SAMPLES; i++) mean += ds[i];
+    for (uint32_t i = 0; i < FEATURE_SAMPLES; i++) mean += preproc_ds[i];
     mean /= FEATURE_SAMPLES;
 
     float var = 0.0f;
     for (uint32_t i = 0; i < FEATURE_SAMPLES; i++) {
-        float d = ds[i] - mean;
+        float d = preproc_ds[i] - mean;
         var += d * d;
     }
     float sigma = sqrtf(var / FEATURE_SAMPLES);
@@ -173,19 +200,18 @@ static void preprocess(const uint16_t *raw, int8_t *out)
     }
 
     const float eps = 1e-6f;
-    float activated[FEATURE_SAMPLES];
     for (uint32_t i = 0; i < FEATURE_SAMPLES; i++) {
-        float z = (ds[i] - mean) / sigma;
+        float z = (preproc_ds[i] - mean) / sigma;
         if (z >  (1.0f - eps)) z =  (1.0f - eps);
         if (z < -(1.0f - eps)) z = -(1.0f - eps);
-        activated[i] = atanhf(z);
+        preproc_activated[i] = atanhf(z);
     }
 
     /* --- Step 4: scale to uint8 [0, 255] --- */
-    float fmin = activated[0], fmax = activated[0];
+    float fmin = preproc_activated[0], fmax = preproc_activated[0];
     for (uint32_t i = 1; i < FEATURE_SAMPLES; i++) {
-        if (activated[i] < fmin) fmin = activated[i];
-        if (activated[i] > fmax) fmax = activated[i];
+        if (preproc_activated[i] < fmin) fmin = preproc_activated[i];
+        if (preproc_activated[i] > fmax) fmax = preproc_activated[i];
     }
     float range = fmax - fmin;
     if (range < 1e-12f) {
@@ -195,7 +221,7 @@ static void preprocess(const uint16_t *raw, int8_t *out)
 
     /* --- Step 5: subtract 128 → int8 for CMSIS-NN --- */
     for (uint32_t i = 0; i < FEATURE_SAMPLES; i++) {
-        int32_t v = (int32_t)roundf((activated[i] - fmin) / range * 255.0f) - 128;
+        int32_t v = (int32_t)roundf((preproc_activated[i] - fmin) / range * 255.0f) - 128;
         if (v >  127) v =  127;
         if (v < -128) v = -128;
         out[i] = (int8_t)v;

@@ -311,7 +311,7 @@ dependencies from `requirements.txt`, and optionally installs
 ## Running the Pipeline
 
 ```bash
-# Generate synthetic data
+# Generate synthetic data (5-class sine/square/chirp/etc.)
 python data/sample_data.py
 
 # Ingest: downsample → normalise → atanh
@@ -335,6 +335,51 @@ python -m pipeline.evaluate
 # Convert to TFLite INT8
 python pipeline/convert.py
 ```
+
+### Real audio: ESC-50 / ESC-10 as Hopf input
+
+`data/sample_data.py` can drive the Hopf reservoir with real environmental
+audio from the [Kaggle ESC-50 dataset](https://github.com/karolpiczak/ESC-50)
+instead of the synthetic five-class signal generators. Each wav is resampled
+44.1 kHz → 4 kHz (the audio rate from Shougat et al. 2023) before being fed to
+the integrator. Outputs match the synthetic contract: raw `x(t)` (and optional
+`y(t)`) at 100 kHz, ready for `pipeline/ingest.py` and downstream models.
+
+```bash
+# 10 clips per class, 10-class ESC-10 subset, parallel integration
+python data/sample_data.py --source esc50 --esc10 --max-clips-per-class 10
+
+# Full 50-class, all 40 clips per class (~1.5 hr on M2 Max with default workers)
+python data/sample_data.py --source esc50 --max-clips-per-class -1
+
+# Train the full model zoo on ESC-10 with cached audio
+python -m pipeline.train_all --source esc50 --esc10 --max_clips_per_class 10
+```
+
+**ESC-50 flags** (available on both `data/sample_data.py` and
+`pipeline.train_all`):
+
+| Flag | Default | Notes |
+|------|---------|-------|
+| `--source {synthetic,esc50}` | `synthetic` | Switch input source. |
+| `--esc50-root PATH` | `/Users/nic-spect/data/recho_ai/Kaggle_Environmental_Sound_Classification_50` | Folder containing `esc50.csv` and `audio/`. |
+| `--esc10` (sample_data) / *omit* `--esc50_full` (train_all) | on | Use the curated 10-class ESC-10 subset. |
+| `--max-clips-per-class N` | `10` | `-1` = all (full ESC-10 = 400 clips, full ESC-50 = 2000 clips). |
+| `--workers N` | `cpu_count - 2` | Parallel Hopf integration via `multiprocessing.Pool` (spawn). |
+| `--cache-dir PATH` | `<esc50-root>/hopf_cache/` | Where the cached `.npy` arrays live so they can be reused across training runs. |
+
+**Wall-time on Apple M2 Max (10 workers, 5 s clip integration at 100 kHz):**
+
+| Subset | Clips | First run | Re-runs (cached) |
+|--------|-------|-----------|------------------|
+| ESC-10, cap 10 | 100 | ~5 min | seconds |
+| ESC-10, full | 400 | ~20 min | seconds |
+| ESC-50, full | 2000 | ~1.5 hr | seconds |
+
+Class names from the ESC-50 CSV are threaded through `train_all.py` for label
+exports (e.g. `random_forest.export_firmware_header(class_names=…)`) and
+prototypical/contrastive few-shot support sets, replacing the synthetic
+`CLASS_NAMES` lookup whenever `--source esc50` is set.
 
 ---
 

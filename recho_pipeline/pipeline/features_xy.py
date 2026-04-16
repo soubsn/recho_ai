@@ -29,6 +29,8 @@ from typing import Optional
 import numpy as np
 from numpy.typing import NDArray
 
+from pipeline.features import scale_to_uint8
+
 
 # Feature map dimensions — must match ingest.py
 N_TIME_STEPS: int = 200
@@ -161,26 +163,6 @@ def build_dual_channel(
         shape (n_clips, 200, 100, 2) float64 — [x, y] channel-last
     """
     return np.stack([x_features, y_features], axis=-1)
-
-
-def scale_to_uint8(
-    feature_maps: NDArray[np.float64],
-) -> NDArray[np.uint8]:
-    """
-    Scale float feature maps globally to [0, 255] uint8.
-
-    Used for single-channel representations (y_only, phase, angle) before
-    passing to models that expect uint8 input matching the x(t) scaling.
-
-    CMSIS-NN NOTE: uint8 [0, 255] maps to int8 [-128, 127] via zero-point
-    offset during TFLite INT8 conversion (zero_point = 128).
-    """
-    fmin = feature_maps.min()
-    fmax = feature_maps.max()
-    if fmax - fmin < 1e-12:
-        return np.zeros(feature_maps.shape, dtype=np.uint8)
-    scaled = (feature_maps - fmin) / (fmax - fmin) * 255.0
-    return np.round(scaled).astype(np.uint8)
 
 
 def scale_dual_channel_to_uint8(

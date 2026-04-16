@@ -122,11 +122,15 @@ class KNNClassifier:
         k: Optional[int] = None,
     ) -> NDArray[np.int64]:
         """
-        Pure numpy KNN inference — mirrors the MCU firmware implementation.
+        Pure numpy KNN inference — reference implementation for the MCU path.
 
         Computes Euclidean distance from each test clip to all training clips
-        in PCA-reduced space. Returns class of k nearest neighbours.
-        This is the exact computation that runs in firmware (with int8 inputs).
+        in PCA-reduced space and returns the class of the k nearest neighbours.
+        Algorithmically mirrors what the firmware does, but operates on float64
+        in Python against the full training set. The on-device version quantises
+        the PCA output to int8 and typically runs against a reduced prototype
+        set — use this to validate the algorithm, not to reproduce exact MCU
+        numerics.
 
         Args:
             features: (n_clips, 200, 100) feature maps
