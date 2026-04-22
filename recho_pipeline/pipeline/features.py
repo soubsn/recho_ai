@@ -31,17 +31,27 @@ N_VIRTUAL_NODES: int = 100
 
 def scale_to_uint8(feature_maps: NDArray[np.float64]) -> NDArray[np.uint8]:
     """
-    Scale float feature maps to [0, 255] uint8.
+    Scale float feature maps to [0, 255] uint8 per-clip.
+
+    Each clip is independently min-max scaled so one outlier clip's dynamic
+    range doesn't crush every other clip into a narrow uint8 band. Global
+    scaling across the whole batch was hiding per-clip structure under
+    worst-case outliers.
 
     CMSIS-NN NOTE: arm_convolve_s8() expects int8 inputs. The TFLite
     converter handles the uint8-to-int8 offset (subtract 128) via
     the input zero-point parameter in cmsis_nn_conv_params.
     """
-    fmin = feature_maps.min()
-    fmax = feature_maps.max()
-    if fmax - fmin < 1e-12:
-        return np.zeros(feature_maps.shape, dtype=np.uint8)
-    scaled = (feature_maps - fmin) / (fmax - fmin) * 255.0
+    if feature_maps.ndim != 3:
+        raise ValueError(
+            f"expected shape (n_clips, H, W); got {feature_maps.shape}"
+        )
+    fmin = feature_maps.min(axis=(1, 2), keepdims=True)
+    fmax = feature_maps.max(axis=(1, 2), keepdims=True)
+    denom = fmax - fmin
+    safe_denom = np.where(denom < 1e-12, 1.0, denom)
+    scaled = (feature_maps - fmin) / safe_denom * 255.0
+    scaled = np.where(denom < 1e-12, 0.0, scaled)
     return np.round(scaled).astype(np.uint8)
 
 

@@ -270,14 +270,21 @@ def _select_esc50_rows(
     if esc10:
         rows = [r for r in rows if r["esc10"].strip().lower() == "true"]
 
-    # Build sorted unique categories so label IDs are stable across runs.
-    categories = sorted({r["category"] for r in rows})
+    # Categories are built from all pipe-split components so multi-label
+    # mixture rows (e.g. "sheep|dog") contribute every component to the
+    # class-names list. Single-label rows are unchanged.
+    categories = sorted({
+        c for r in rows for c in r["category"].split("|")
+    })
     cat_to_id = {c: i for i, c in enumerate(categories)}
 
-    # Cap per class.
+    # Cap per primary class. Mixture rows bucket into their first component's
+    # class; the per-clip `source_category` in the manifest keeps the full
+    # pipe-split list for membership-based binary relabel at load time.
     by_cls: dict[int, list[dict[str, str]]] = {}
     for r in rows:
-        cid = cat_to_id[r["category"]]
+        primary = r["category"].split("|")[0]
+        cid = cat_to_id[primary]
         r = dict(r)
         r["_class_id"] = str(cid)
         by_cls.setdefault(cid, []).append(r)
@@ -327,6 +334,8 @@ def generate_dataset_esc50(
     cache: bool = True,
     workers: int | None = None,
     cache_dir: Path | str | None = None,
+    csv_name: str = "esc50.csv",
+    audio_subdir: str = "audio",
 ) -> tuple[NDArray[np.float64], NDArray[np.int64], list[str]]:
     """
     Run real ESC-50 audio through the Hopf reservoir.
@@ -348,8 +357,8 @@ def generate_dataset_esc50(
         class_names: ESC-50 category names indexed by label
     """
     esc50_root = Path(esc50_root)
-    csv_path = esc50_root / "esc50.csv"
-    audio_dir = esc50_root / "audio"
+    csv_path = esc50_root / csv_name
+    audio_dir = esc50_root / audio_subdir
     cache_root = Path(cache_dir) if cache_dir is not None else default_esc50_cache_dir(esc50_root)
     if workers is None:
         workers = _default_workers()
@@ -361,7 +370,8 @@ def generate_dataset_esc50(
 
     cap = "all" if max_clips_per_class is None else str(max_clips_per_class)
     subset = "esc10" if esc10 else "esc50"
-    cache_key = f"esc50_{subset}_n{cap}_c{n_classes}"
+    csv_tag = "" if csv_name == "esc50.csv" else f"_{Path(csv_name).stem}"
+    cache_key = f"esc50_{subset}_n{cap}_c{n_classes}{csv_tag}"
     cache_x = cache_root / f"{cache_key}_x.npy"
     cache_labels = cache_root / f"{cache_key}_labels.npy"
     cache_names = cache_root / f"{cache_key}_classes.txt"
@@ -407,6 +417,8 @@ def generate_dataset_xy_esc50(
     cache: bool = True,
     workers: int | None = None,
     cache_dir: Path | str | None = None,
+    csv_name: str = "esc50.csv",
+    audio_subdir: str = "audio",
 ) -> tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.int64], list[str]]:
     """
     Same as generate_dataset_esc50 but captures both x(t) and y(t)
@@ -415,8 +427,8 @@ def generate_dataset_xy_esc50(
     Memory: ~2x generate_dataset_esc50 (both x and y stored).
     """
     esc50_root = Path(esc50_root)
-    csv_path = esc50_root / "esc50.csv"
-    audio_dir = esc50_root / "audio"
+    csv_path = esc50_root / csv_name
+    audio_dir = esc50_root / audio_subdir
     cache_root = Path(cache_dir) if cache_dir is not None else default_esc50_cache_dir(esc50_root)
     if workers is None:
         workers = _default_workers()
@@ -428,7 +440,8 @@ def generate_dataset_xy_esc50(
 
     cap = "all" if max_clips_per_class is None else str(max_clips_per_class)
     subset = "esc10" if esc10 else "esc50"
-    cache_key = f"esc50_xy_{subset}_n{cap}_c{n_classes}"
+    csv_tag = "" if csv_name == "esc50.csv" else f"_{Path(csv_name).stem}"
+    cache_key = f"esc50_xy_{subset}_n{cap}_c{n_classes}{csv_tag}"
     cache_x = cache_root / f"{cache_key}_x.npy"
     cache_y_state = cache_root / f"{cache_key}_y_state.npy"
     cache_labels = cache_root / f"{cache_key}_labels.npy"
@@ -486,6 +499,7 @@ def export_dataset_text(
     source: str = "esc50",
     export_fs: int = FS_TARGET,
     hw_fs: int = FS_HW,
+    clip_duration_s: float | None = None,
 ) -> Path:
     """
     Write the integrated dataset as per-clip ASCII files plus manifest.json.
@@ -535,6 +549,10 @@ def export_dataset_text(
         if source_rows is not None:
             entry["source_filename"] = source_rows[i]["filename"]
             entry["source_category"] = source_rows[i]["category"]
+            for k, v in source_rows[i].items():
+                if k in ("filename", "category"):
+                    continue
+                entry[k] = v
         files.append(entry)
         if (i + 1) % 50 == 0 or i + 1 == n:
             print(f"  [export {i + 1}/{n}] wrote {x_path.name}")
@@ -553,7 +571,11 @@ def export_dataset_text(
         "export_fs": export_fs,
         "downsample_factor": ds_factor,
         "samples_per_clip": int(samples_per_clip),
-        "clip_duration_s": ESC50_CLIP_DURATION if source == "esc50" else CLIP_DURATION,
+        "clip_duration_s": (
+            clip_duration_s
+            if clip_duration_s is not None
+            else (ESC50_CLIP_DURATION if source == "esc50" else CLIP_DURATION)
+        ),
         "hopf": {
             "mu": MU, "A_drive": A_DRIVE,
             "omega": float(OMEGA), "omega_drive": float(OMEGA_DRIVE),
@@ -569,6 +591,7 @@ def export_dataset_text(
 def load_dataset_from_text_cache(
     cache_dir: Path | str,
     target_class: str | None = None,
+    split_filter: str | None = None,
 ) -> tuple[NDArray[np.float64], NDArray[np.int64], list[str], int]:
     """
     Load the Hopf-integrated ESC-50 dataset from the exported text cache.
@@ -584,6 +607,9 @@ def load_dataset_from_text_cache(
         target_class: if set, relabel as a binary task — 1 where the source
             class name equals target_class, else 0. The returned class_names
             becomes [f"not_{target_class}", target_class].
+        split_filter: if set (e.g. "train"/"val"/"test"), only return clips
+            whose per-clip manifest entry has a matching `split` field. Raises
+            if the cache has no `split` field on any selected clip.
 
     Returns:
         x_data: (n_clips, samples_per_clip) float64 at export_fs.
@@ -599,36 +625,138 @@ def load_dataset_from_text_cache(
     samples_per_clip = int(manifest["samples_per_clip"])
     fs = int(manifest.get("export_fs", FS_TARGET))
     class_names = list(manifest["class_names"])
+    files = manifest.get("files", [])
 
-    labels = np.loadtxt(cache_dir / "labels.txt", dtype=np.int64)
-    if labels.shape != (n_clips,):
+    all_labels = np.loadtxt(cache_dir / "labels.txt", dtype=np.int64)
+    if all_labels.shape != (n_clips,):
         raise ValueError(
-            f"labels.txt has {labels.shape[0]} entries but manifest says {n_clips}"
+            f"labels.txt has {all_labels.shape[0]} entries but manifest says {n_clips}"
         )
 
-    print(f"[sample_data] Loading {n_clips} clips from {cache_dir} (fs={fs} Hz) ...")
-    x_data = np.zeros((n_clips, samples_per_clip), dtype=np.float64)
-    for i in range(n_clips):
-        x_path = cache_dir / "clips" / f"clip_{i:04d}_x.txt"
-        x_data[i] = np.loadtxt(x_path, dtype=np.float64)
-        if (i + 1) % 200 == 0 or i + 1 == n_clips:
-            print(f"  [{i + 1}/{n_clips}] loaded")
+    if split_filter is not None:
+        if len(files) != n_clips:
+            raise ValueError(
+                f"split_filter={split_filter!r} requested but manifest.files has "
+                f"{len(files)} entries (expected {n_clips}); cache was exported "
+                f"without per-clip records."
+            )
+        selected_idx = [
+            i for i, f in enumerate(files) if f.get("split") == split_filter
+        ]
+        if not selected_idx:
+            raise ValueError(
+                f"No clips with split={split_filter!r} in {cache_dir}. "
+                f"Available splits: "
+                f"{sorted({f.get('split') for f in files if 'split' in f})}"
+            )
+        print(
+            f"[sample_data] split_filter={split_filter!r} — {len(selected_idx)} "
+            f"of {n_clips} clips selected"
+        )
+        n_selected = len(selected_idx)
+        labels = all_labels[selected_idx]
+    else:
+        selected_idx = list(range(n_clips))
+        n_selected = n_clips
+        labels = all_labels
+
+    print(f"[sample_data] Loading {n_selected} clips from {cache_dir} (fs={fs} Hz) ...")
+    x_data = np.zeros((n_selected, samples_per_clip), dtype=np.float64)
+    for out_i, src_i in enumerate(selected_idx):
+        x_path = cache_dir / "clips" / f"clip_{src_i:04d}_x.txt"
+        x_data[out_i] = np.loadtxt(x_path, dtype=np.float64)
+        if (out_i + 1) % 200 == 0 or out_i + 1 == n_selected:
+            print(f"  [{out_i + 1}/{n_selected}] loaded")
 
     if target_class is not None:
         if target_class not in class_names:
             raise ValueError(
                 f"target_class={target_class!r} not in class_names={class_names}"
             )
-        target_id = class_names.index(target_class)
-        labels = (labels == target_id).astype(np.int64)
+        # Prefer per-clip `source_category` from the manifest: it preserves
+        # pipe-joined multi-label mixture categories (e.g. "sheep|dog"), so
+        # a clip counts as positive whenever target_class is any component.
+        # Fall back to integer-label equality for older caches that don't
+        # record source_category per file.
+        use_manifest = (
+            len(files) == n_clips
+            and all("source_category" in f for f in files)
+        )
+        if use_manifest:
+            labels = np.array(
+                [
+                    1 if target_class in files[src_i]["source_category"].split("|") else 0
+                    for src_i in selected_idx
+                ],
+                dtype=np.int64,
+            )
+        else:
+            target_id = class_names.index(target_class)
+            labels = (labels == target_id).astype(np.int64)
         pos = int(labels.sum())
         print(
             f"[sample_data] Binary relabel: {pos} positive ({target_class}), "
-            f"{n_clips - pos} negative — positive rate {pos / n_clips:.1%}"
+            f"{n_selected - pos} negative — positive rate {pos / n_selected:.1%}"
         )
         class_names = [f"not_{target_class}", target_class]
 
     return x_data, labels, class_names, fs
+
+
+def load_xy_dataset_from_text_cache(
+    cache_dir: Path | str,
+    target_class: str | None = None,
+    split_filter: str | None = None,
+) -> tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.int64], list[str], int]:
+    """
+    Like `load_dataset_from_text_cache`, but also reads the y(t) state from
+    `clip_XXXX_y.txt`.
+
+    Required when training with any representation that depends on y:
+    y_only, xy_dual, phase (sqrt(x^2+y^2)), or angle (arctan2(y, x)).
+
+    Args:
+        cache_dir: directory containing manifest.json, labels.txt, classes.txt, clips/.
+        target_class: same binary-relabel semantics as the x-only loader.
+        split_filter: if set, only clips whose manifest entry has matching `split`.
+
+    Returns:
+        x_data, y_data: both (n_clips, samples_per_clip) float64 at export_fs.
+        labels: (n_clips,) int64.
+        class_names: list[str].
+        fs: int.
+    """
+    cache_dir = Path(cache_dir)
+    x_data, labels, class_names, fs = load_dataset_from_text_cache(
+        cache_dir=cache_dir,
+        target_class=target_class,
+        split_filter=split_filter,
+    )
+
+    # Re-derive selected_idx so y files line up with the (filtered) x rows.
+    with open(cache_dir / "manifest.json") as f:
+        manifest = json.load(f)
+    files = manifest.get("files", [])
+    if split_filter is not None:
+        selected_idx = [i for i, f in enumerate(files) if f.get("split") == split_filter]
+    else:
+        selected_idx = list(range(int(manifest["n_clips"])))
+
+    n_selected, samples_per_clip = x_data.shape
+    print(f"[sample_data] Loading y(t) for {n_selected} clips ...")
+    y_data = np.zeros((n_selected, samples_per_clip), dtype=np.float64)
+    for out_i, src_i in enumerate(selected_idx):
+        y_path = cache_dir / "clips" / f"clip_{src_i:04d}_y.txt"
+        if not y_path.exists():
+            raise FileNotFoundError(
+                f"y(t) cache missing at {y_path} — this cache was exported x-only. "
+                f"Re-export with y_data to use y-dependent INPUT_REP values."
+            )
+        y_data[out_i] = np.loadtxt(y_path, dtype=np.float64)
+        if (out_i + 1) % 200 == 0 or out_i + 1 == n_selected:
+            print(f"  [{out_i + 1}/{n_selected}] y loaded")
+
+    return x_data, y_data, labels, class_names, fs
 
 
 def _class_factory(class_id: int, variation_seed: int) -> Callable[[float], float]:
@@ -760,6 +888,16 @@ def _parse_args() -> argparse.Namespace:
         help="Path to ESC-50 dataset root (containing esc50.csv and audio/).",
     )
     p.add_argument(
+        "--csv-name", type=str, default="esc50.csv",
+        help="CSV filename inside --esc50-root. Use esc50_mixed.csv to consume "
+             "the output of data/mix_esc50.py (pipe-joined multi-label rows).",
+    )
+    p.add_argument(
+        "--audio-subdir", type=str, default="audio",
+        help="Audio subdirectory inside --esc50-root. Must contain every "
+             "filename listed in --csv-name (use audio_mixed for mix_esc50 output).",
+    )
+    p.add_argument(
         "--esc10", action="store_true",
         help="Use the curated 10-class ESC-10 subset instead of full 50-class ESC-50.",
     )
@@ -823,6 +961,8 @@ def main() -> None:
                 cache=cache,
                 workers=workers,
                 cache_dir=args.cache_dir,
+                csv_name=args.csv_name,
+                audio_subdir=args.audio_subdir,
             )
         else:
             x_data, labels, class_names = generate_dataset_esc50(
@@ -832,11 +972,13 @@ def main() -> None:
                 cache=cache,
                 workers=workers,
                 cache_dir=args.cache_dir,
+                csv_name=args.csv_name,
+                audio_subdir=args.audio_subdir,
             )
         if args.export_dir is not None:
             # Re-derive the row list (in the same selection/order used by the
             # generators) so the manifest can include source filenames.
-            all_rows = _read_esc50_csv(Path(args.esc50_root) / "esc50.csv")
+            all_rows = _read_esc50_csv(Path(args.esc50_root) / args.csv_name)
             source_rows, _ = _select_esc50_rows(all_rows, args.esc10, cap)
         print(f"\nDataset shape: x={x_data.shape}, labels={labels.shape}")
         for cls, name in enumerate(class_names):

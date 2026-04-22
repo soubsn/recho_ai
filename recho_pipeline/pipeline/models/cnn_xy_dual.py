@@ -6,11 +6,11 @@ Output: [batch, n_classes]
 
 The first Conv2D layer sees both x and y feature maps simultaneously
 and learns cross-channel patterns — relationships between x(t) and y(t)
-dynamics at each spatial location. This is the simplest way to incorporate
-y(t): zero architectural change beyond increasing input channels from 1 to 2.
+dynamics at each spatial location.
 
-Comparison target: Model A (x_only) — does y(t) improve accuracy when
-combined at the input level?
+Head uses GAP + Dense(64) + Dropout(0.5) — same regularised head as
+cnn_regularized. The earlier Flatten + Dense(128) version had 10.2M
+parameters on ~1600 training samples and overfit in 2-3 epochs.
 
 CMSIS-NN NOTE: arm_convolve_s8() supports multi-channel input natively.
 The input zero_point and scale are per-tensor (not per-channel) for inputs,
@@ -89,13 +89,17 @@ def build_model(n_classes: int = 5) -> Sequential:
         # CMSIS-NN/Source/PoolingFunctions/arm_max_pool_s8.c
         layers.MaxPool2D((2, 2), name="pool2_arm_max_pool_s8"),
 
-        # arm_reshape_s8() — flatten: 50*25*64 = 80,000
-        layers.Flatten(name="flatten_arm_reshape_s8"),
+        # arm_avgpool_s8() — global average over spatial dims → (64,)
+        # CMSIS-NN/Source/PoolingFunctions/arm_avgpool_s8.c
+        layers.GlobalAveragePooling2D(name="gap_arm_avgpool_s8"),
 
-        # arm_fully_connected_s8() — 128 units (multiple of 4)
+        # arm_fully_connected_s8() — 64 units (multiple of 4)
         # CMSIS-NN/Source/FullyConnectedFunctions/arm_fully_connected_s8.c
-        layers.Dense(128, activation="relu", use_bias=True,
+        layers.Dense(64, activation="relu", use_bias=True,
                      name="dense1_arm_fully_connected_s8"),
+
+        # Dropout is a training-only op; it's not exported to the INT8 graph.
+        layers.Dropout(0.5, name="dropout_head"),
 
         # arm_fully_connected_s8() + arm_softmax_s8()
         # CMSIS-NN/Source/SoftmaxFunctions/arm_softmax_s8.c

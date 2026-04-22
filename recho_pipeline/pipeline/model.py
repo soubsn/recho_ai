@@ -46,6 +46,12 @@ def build_model(n_classes: int = 5) -> Sequential:
     model = Sequential([
         keras.Input(shape=(INPUT_HEIGHT, INPUT_WIDTH, INPUT_CHANNELS)),
 
+        # Scale uint8 [0, 255] feature maps to [0, 1] for stable FP32
+        # training. The TFLite converter folds this scale into the input
+        # quantization params, so INT8 inference still accepts uint8
+        # feature maps — no runtime preprocessing needed on the MCU.
+        layers.Rescaling(1.0 / 255.0, name="rescale_input"),
+
         # --- Block 1 ---
         # arm_convolve_s8() — 2D convolution, INT8 in/out
         # CMSIS-NN/Source/ConvolutionFunctions/arm_convolve_s8.c
@@ -100,9 +106,21 @@ def build_model(n_classes: int = 5) -> Sequential:
             name="pool2_arm_max_pool_s8",
         ),
 
+        #OLD
         # arm_reshape_s8() — flatten to 1D vector
         # CMSIS-NN: reshape is a no-op (pointer reinterpret), no kernel needed
         # Flattened size: 50 * 25 * 64 = 80,000
+        # layers.Flatten(name="flatten_arm_reshape_s8"),
+
+
+        # arm_max_pool_s8() — aggressive spatial reduction before flatten.
+        # (50, 25, 64) → (10, 5, 64) = 3,200 features. Keeps some spatial
+        # structure (GAP threw too much away — model wouldn't learn) while
+        # cutting dense1 25× vs. the raw 80,000-element flatten.
+        layers.MaxPool2D((5, 5), name="pool3_arm_max_pool_s8"),
+
+        # arm_reshape_s8() — flatten to 1D vector (pointer reinterpret).
+        # Flattened size: 10 * 5 * 64 = 3,200.
         layers.Flatten(name="flatten_arm_reshape_s8"),
 
         # arm_fully_connected_s8() — dense layer INT8

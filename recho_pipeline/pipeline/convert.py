@@ -403,7 +403,7 @@ def main() -> None:
     from pipeline.ingest import process_dataset
     from pipeline.features import extract_features
     from pipeline.model import build_model
-    from pipeline.train import apply_qat, prepare_data, train, representative_data_gen
+    from recho_pipeline.pipeline.train_CNN import apply_qat, prepare_data, train, representative_data_gen
 
     print("[convert] Building and training model on synthetic data ...")
     raw_x, labels = generate_dataset(n_clips_per_class=10, n_classes=5, cache=False)
